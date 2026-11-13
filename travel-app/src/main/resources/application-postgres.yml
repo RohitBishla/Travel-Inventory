@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/travel_invoice}
+    username: ${DATABASE_USERNAME:travel}
+    password: ${DATABASE_PASSWORD:travel}
+    hikari:
+      connection-init-sql: SET lock_timeout = '3s'

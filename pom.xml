@@ -21,6 +21,7 @@
         <module>travel-common</module>
         <module>travel-transaction</module>
         <module>travel-invoice</module>
+        <module>travel-app</module>
     </modules>
 
     <properties>
