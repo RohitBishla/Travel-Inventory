@@ -20,6 +20,7 @@
     <modules>
         <module>travel-common</module>
         <module>travel-transaction</module>
+        <module>travel-invoice</module>
     </modules>
 
     <properties>
