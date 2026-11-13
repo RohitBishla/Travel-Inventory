@@ -9,8 +9,10 @@ JDK 21. Maven is not needed; the wrapper downloads it. On macOS: `brew install o
 ## Run the API
 
 ```bash
-./mvnw spring-boot:run
+./run.sh            # builds without tests, then starts the API
 ```
+
+`./run.sh` finds a JDK 21 by itself (`JAVA_HOME`, `java_home` or Homebrew). It also has `build`, `test` and `reset` (wipes `./data`); see `./run.sh help`. Without the script: `./mvnw spring-boot:run`.
 
 Run it from the repository root. The API listens on `http://localhost:8080` and stores data in an H2 file database under `./data/`. Flyway creates the schema on start. To run the packaged jar instead: `./mvnw package -DskipTests && java -jar travel-app/target/travel-app-0.0.1-SNAPSHOT.jar`. `GET /health` reports status; `/health/readiness` and `/health/liveness` are the probe endpoints.
 
