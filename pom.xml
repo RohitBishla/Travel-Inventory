@@ -19,6 +19,7 @@
 
     <modules>
         <module>travel-common</module>
+        <module>travel-transaction</module>
     </modules>
 
     <properties>
