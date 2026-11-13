@@ -16,7 +16,19 @@ JDK 21. Maven is not needed; the wrapper downloads it. On macOS: `brew install o
 
 Run it from the repository root. The API listens on `http://localhost:8080` and stores data in an H2 file database under `./data/`. Flyway creates the schema on start. To run the packaged jar instead: `./mvnw package -DskipTests && java -jar travel-app/target/travel-app-0.0.1-SNAPSHOT.jar`. `GET /health` reports status; `/health/readiness` and `/health/liveness` are the probe endpoints.
 
-To use PostgreSQL instead, set `DATABASE_URL`, `DATABASE_USERNAME` and `DATABASE_PASSWORD` and run with `--spring.profiles.active=postgres`. The test suite does not run against PostgreSQL.
+To use PostgreSQL instead, set `DATABASE_URL`, `DATABASE_USERNAME` and `DATABASE_PASSWORD` and run with `--spring.profiles.active=postgres`. The automated tests run on H2; the curl flow below has also been run by hand against PostgreSQL 17.
+
+### Swagger
+
+With the API running, open `http://localhost:8080/swagger-ui.html` to try every endpoint from the browser. The OpenAPI 3.1 spec is at `/v3/api-docs`. Set `SWAGGER_ENABLED=false` to turn both off.
+
+### Docker
+
+```bash
+docker compose up --build
+```
+
+This builds the app image and starts it on `http://localhost:8080` with PostgreSQL 17 (data in the `postgres-data` volume). `docker compose down -v` stops everything and deletes the data. To run the image alone on the H2 file database: `docker build -t travel-invoice . && docker run -p 8080:8080 travel-invoice`.
 
 ## Run the tests
 
@@ -191,4 +203,4 @@ travel-invoice/src/main/java/com/navan/travel/invoice/
   persistence/              invoice header, snapshot lines and rollups
 ```
 
-Unit tests sit next to the code they cover (`MoneyTest`, `PageQueryTest`, `TransactionValidatorTest`, `RollupCalculatorTest`). The HTTP tests live in `travel-app`. `./mvnw test` runs all of them, 63 in total.
+Unit tests sit next to the code they cover (`MoneyTest`, `PageQueryTest`, `TransactionValidatorTest`, `RollupCalculatorTest`). The HTTP tests live in `travel-app`. `./mvnw test` runs all of them, 65 in total.

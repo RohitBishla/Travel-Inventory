@@ -30,7 +30,7 @@ clients ──HTTP──▶  app instance 1..N       stateless: no cache, no in-
 
 **Stack:** Java 21, Spring Boot 4.1, Spring JDBC (`JdbcClient`) with hand-written SQL, Flyway. There is no ORM: the hard parts here are SQL-shaped (unique-violation handling, row locks, keyset pages, batched child loads), and every statement the service runs is visible in a repository.
 
-**Database:** file-backed H2 by default (one command, nothing to install but a JDK). The schema and SQL stay inside what H2 and PostgreSQL share, and a `postgres` profile is included. The test suite runs on H2 only; the PostgreSQL profile has not been exercised by it. Nothing is kept in process memory, in main or test code.
+**Database:** file-backed H2 by default (one command, nothing to install but a JDK). The schema and SQL stay inside what H2 and PostgreSQL share, and a `postgres` profile is included. The test suite runs on H2 only. The PostgreSQL profile was checked by hand against PostgreSQL 17: both migrations, the README curl flow, and 40 concurrent POSTs with one `external_id` (one 201, 39 409s, one row). `docker compose up` runs it that way. Nothing is kept in process memory, in main or test code.
 
 ## 2. Tables and models
 
