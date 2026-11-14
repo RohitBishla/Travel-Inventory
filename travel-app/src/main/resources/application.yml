@@ -17,6 +17,9 @@ spring:
     deserialization:
       use-big-decimal-for-floats: true
       fail-on-unknown-properties: false
+    datatype:
+      enum:
+        fail-on-numbers-for-enums: true
   lifecycle:
     timeout-per-shutdown-phase: 20s
 

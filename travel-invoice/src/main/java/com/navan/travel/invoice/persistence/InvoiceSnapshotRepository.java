@@ -18,6 +18,7 @@ import com.navan.travel.invoice.snapshot.InvoiceSnapshot;
 import com.navan.travel.transaction.FeeLine;
 import com.navan.travel.transaction.TaxLine;
 import com.navan.travel.transaction.TransactionType;
+import com.navan.travel.transaction.metadata.FeeKind;
 
 @Repository
 public class InvoiceSnapshotRepository {
@@ -213,7 +214,8 @@ public class InvoiceSnapshotRepository {
             String metadataJson) {
 
         InvoiceLine toInvoiceLine(List<TaxLine> taxLines, List<FeeLine> feeLines) {
-            return new InvoiceLine(transactionId, externalId, type, category, currency, occurredAt,
+            FeeKind feeKind = type == TransactionType.NAVAN_FEE ? FeeKind.fromCode(category).orElseThrow() : null;
+            return new InvoiceLine(transactionId, externalId, type, feeKind, currency, occurredAt,
                     Money.toCurrencyScale(total, currency), transactionVersion, taxLines, feeLines, metadataJson);
         }
     }

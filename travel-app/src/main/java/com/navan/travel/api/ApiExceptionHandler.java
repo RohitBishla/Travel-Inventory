@@ -1,5 +1,9 @@
 package com.navan.travel.api;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -18,11 +22,21 @@ import com.navan.travel.common.PublicIds;
 import com.navan.travel.common.ValidationException;
 import com.navan.travel.transaction.identity.DuplicateTransactionException;
 
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.exc.MismatchedInputException;
+import tools.jackson.databind.json.JsonMapper;
+
 @RestControllerAdvice
 public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
     private static final String RETRY_AFTER_SECONDS = "1";
+
+    private final JsonMapper jsonMapper;
+
+    public ApiExceptionHandler(JsonMapper jsonMapper) {
+        this.jsonMapper = jsonMapper;
+    }
 
     @ExceptionHandler(ValidationException.class)
     ResponseEntity<ApiError> handleValidation(ValidationException e) {
@@ -32,9 +46,33 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     ResponseEntity<ApiError> handleUnreadableBody(HttpMessageNotReadableException e) {
+        if (e.getMostSpecificCause() instanceof MismatchedInputException mismatch
+                && mismatch.getTargetType() != null && mismatch.getTargetType().isEnum()) {
+            String violation = fieldPath(mismatch) + " must be one of: " + allowedValues(mismatch.getTargetType());
+            return ResponseEntity.badRequest()
+                    .body(new ApiError("validation_failed", "Request is invalid", List.of(violation), null));
+        }
         String cause = String.valueOf(e.getMostSpecificCause().getMessage()).lines().findFirst().orElse("");
         return ResponseEntity.badRequest().body(ApiError.of("malformed_request",
                 "Request body is not valid JSON or a field has the wrong type: " + cause));
+    }
+
+    private String allowedValues(Class<?> enumType) {
+        return Arrays.stream(enumType.getEnumConstants())
+                .map(constant -> jsonMapper.convertValue(constant, String.class))
+                .collect(Collectors.joining(", "));
+    }
+
+    private static String fieldPath(MismatchedInputException mismatch) {
+        StringBuilder path = new StringBuilder();
+        for (JacksonException.Reference reference : mismatch.getPath()) {
+            if (reference.getPropertyName() != null) {
+                path.append(path.isEmpty() ? "" : ".").append(reference.getPropertyName());
+            } else {
+                path.append('[').append(reference.getIndex()).append(']');
+            }
+        }
+        return path.toString();
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)

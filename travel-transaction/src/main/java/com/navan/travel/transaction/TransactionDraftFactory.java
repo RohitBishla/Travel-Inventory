@@ -1,8 +1,5 @@
 package com.navan.travel.transaction;
 
-import java.util.Arrays;
-import java.util.stream.Collectors;
-
 import org.springframework.stereotype.Component;
 
 import com.navan.travel.common.ValidationException;
@@ -10,10 +7,6 @@ import com.navan.travel.transaction.metadata.TransactionMetadata;
 
 @Component
 class TransactionDraftFactory {
-
-    private static final String SUPPORTED_TYPES = Arrays.stream(TransactionType.values())
-            .map(TransactionType::code)
-            .collect(Collectors.joining(", "));
 
     private final MetadataReader metadataReader;
     private final TransactionValidator validator;
@@ -24,7 +17,7 @@ class TransactionDraftFactory {
     }
 
     TransactionDraft fromNew(NewTransaction input) {
-        TransactionType type = parseType(input.type());
+        TransactionType type = requireType(input.type());
         TransactionDraft draft = new TransactionDraft(
                 type,
                 input.externalId(),
@@ -51,11 +44,10 @@ class TransactionDraftFactory {
         return draft;
     }
 
-    private static TransactionType parseType(String code) {
-        if (code == null) {
+    private static TransactionType requireType(TransactionType type) {
+        if (type == null) {
             throw new ValidationException("type is required");
         }
-        return TransactionType.fromCode(code)
-                .orElseThrow(() -> new ValidationException("type must be one of: " + SUPPORTED_TYPES));
+        return type;
     }
 }

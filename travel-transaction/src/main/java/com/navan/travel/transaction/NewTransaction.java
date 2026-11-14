@@ -7,7 +7,7 @@ import java.util.List;
 import tools.jackson.databind.JsonNode;
 
 public record NewTransaction(
-        String type,
+        TransactionType type,
         String externalId,
         String currency,
         Instant occurredAt,

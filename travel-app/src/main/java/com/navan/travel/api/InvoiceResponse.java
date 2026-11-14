@@ -14,10 +14,13 @@ import com.navan.travel.invoice.snapshot.InvoiceSnapshot;
 import com.navan.travel.transaction.FeeLine;
 import com.navan.travel.transaction.TaxLine;
 import com.navan.travel.transaction.TransactionType;
+import com.navan.travel.transaction.metadata.FeeKind;
 
 public record InvoiceResponse(
         String id,
         List<String> transactionIds,
+        List<TransactionType> transactionTypesIncluded,
+        List<FeeKind> navanFeeKindsIncluded,
         String currency,
         BigDecimal total,
         Map<String, BigDecimal> totals,
@@ -36,6 +39,8 @@ public record InvoiceResponse(
         return new InvoiceResponse(
                 PublicIds.invoice(invoice.id()),
                 lines.stream().map(Line::transactionId).toList(),
+                snapshot.transactionTypes(),
+                snapshot.navanFeeKinds(),
                 snapshot.currency(),
                 snapshot.total(),
                 totals,

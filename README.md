@@ -41,7 +41,7 @@ Each module's unit tests run first. Then the `travel-app` tests start the app on
 | # | Requirement | Test |
 |---|---|---|
 | 1 | Create every type from the seeds; GET returns coupons, address, legs, `fee_kind` | `TransactionCreateTest.createsEveryTypeFromSeedsAndReadsBackTheTypedStructure` |
-| 2 | Duplicate `external_id` returns 409 with the existing id; one row | `DuplicateExternalIdTest.secondPostWithSameExternalIdReturnsConflictWithExistingId` |
+| 2 | Duplicate `external_id` returns 409 with the existing id (`transaction_id`); one row | `DuplicateExternalIdTest.secondPostWithSameExternalIdReturnsConflictWithExistingId` |
 | 3 | Trip invoice matches `expected-invoice.json` (685.70 EUR) | `InvoiceCreateTest.tripInvoiceMatchesExpectedInvoiceFixture` |
 | 4 | Invoice unchanged after the stored flight total changes | `InvoiceSnapshotTest.invoiceKeepsBilledValuesAfterTheStoredFlightChanges` |
 | 5 | EUR + USD invoice returns 409 | `InvoiceCreateTest.mixedCurrenciesAreRejected` |
@@ -55,7 +55,7 @@ Each module's unit tests run first. Then the `travel-app` tests start the app on
 
 | Method | Path | Success | Errors |
 |---|---|---|---|
-| `POST` | `/transactions` | 201 + `Location` | 400 invalid, 409 duplicate `external_id` (body carries the existing `transaction_id`) |
+| `POST` | `/transactions` | 201 + `Location`; body is the stored transaction, server id in `transaction_id` | 400 invalid, 409 duplicate `external_id` (body carries the existing `transaction_id`) |
 | `GET` | `/transactions/{id}` | 200 | 404 |
 | `GET` | `/transactions?limit=&cursor=` | 200 | 400 bad `limit` or cursor |
 | `PATCH` | `/transactions/{id}` | 200 | 400, 404, 409 if on an invoice |
@@ -70,7 +70,7 @@ Errors share one shape: `{"error": "<code>", "message": "...", "details": [...]}
 
 Conventions:
 
-- **Ids** are `txn_<n>` and `inv_<n>`. A transaction carries its id as `transaction_id`; an invoice as `id`, with its transactions in `transaction_ids`.
+- **Ids** are `txn_<n>` and `inv_<n>`. **A transaction's server id is the `transaction_id` field** (there is no separate `id` field on a transaction); it is the value to pass to `GET /transactions/{id}` and to `POST /invoices`. An invoice's server id is `id`, and it lists its transactions in `transaction_ids`, the types on it in `transaction_types_included` and its Navan fee kinds in `navan_fee_kinds_included` (both in a fixed order, as in `expected-invoice.json`).
 - **Money** is a JSON number with at most the currency's minor units (EUR: 2 decimals). Amounts are stored as `NUMERIC(19,4)` and never rounded.
 - **Lists** return newest first: `{"items": [...], "limit": 50, "next_cursor": "..."}`. `limit` defaults to 50 and is capped at 100. Pass `next_cursor` back as `cursor`; it is absent on the last page.
 - **PATCH /transactions** accepts `occurred_at`, `total`, `tax_lines`, `fee_lines`, `metadata`; each field sent replaces the stored one. `type`, `external_id` and `currency` cannot be changed.
@@ -90,6 +90,7 @@ post() { curl -s -X POST "$API$1" -H 'Content-Type: application/json' -d "$2"; e
 
 ```bash
 post /transactions "$(jq .flight $SEEDS)"           # txn_1
+# 201 {"transaction_id":"txn_1","type":"flight","external_id":"flight-TXL-LHR-2026-03-11",...}
 post /transactions "$(jq .hotel $SEEDS)"            # txn_2
 post /transactions "$(jq .rail $SEEDS)"             # txn_3
 post /transactions "$(jq .trip_fee $SEEDS)"         # txn_4
@@ -154,7 +155,7 @@ curl -s -X DELETE $API/transactions/txn_1
 ### Get and list invoices
 
 ```bash
-curl -s $API/invoices/inv_2 | jq '{transaction_ids, total, totals, tax_rollup, fee_rollup}'
+curl -s $API/invoices/inv_2 | jq '{transaction_ids, transaction_types_included, navan_fee_kinds_included, total, totals, tax_rollup, fee_rollup}'
 curl -s "$API/invoices?limit=10" | jq '.items[] | {id, total, line_count}'
 ```
 
@@ -186,7 +187,7 @@ A Maven multi-module build. Dependencies point one way, `app → invoice → tra
 |---|---|---|
 | `travel-common` | Money rules, paging, public ids, retry, shared exceptions | |
 | `travel-transaction` | Transaction model and sealed metadata types, validation, `external_id` identity, persistence | `V1__create_transaction_tables.sql` |
-| `travel-invoice` | Invoice service, snapshot builder and rollups, persistence | `V2__create_invoice_tables.sql` |
+| `travel-invoice` | Invoice service, snapshot builder and rollups, persistence | `V2__create_invoice_tables.sql`, `V3__constrain_invoice_line_types.sql` |
 | `travel-app` | HTTP controllers, DTOs, error mapping, Spring Boot entry point, configuration, API tests | |
 
 ```
@@ -203,4 +204,4 @@ travel-invoice/src/main/java/com/navan/travel/invoice/
   persistence/              invoice header, snapshot lines and rollups
 ```
 
-Unit tests sit next to the code they cover (`MoneyTest`, `PageQueryTest`, `TransactionValidatorTest`, `RollupCalculatorTest`). The HTTP tests live in `travel-app`. `./mvnw test` runs all of them, 65 in total.
+Unit tests sit next to the code they cover (`MoneyTest`, `PageQueryTest`, `TransactionValidatorTest`, `RollupCalculatorTest`). The HTTP tests live in `travel-app`. `./mvnw test` runs all of them, 66 in total.

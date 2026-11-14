@@ -1,13 +1,32 @@
-# Flight, hotel, rail, Navan fee transactions and invoice
+# Take-home B — Flight, hotel, rail, Navan fee transactions and invoice
 
-We expect a small service you would defend in a code review: data model, duplicate identity, concurrent writes, invoice snapshot, tests.
+**Deadline:** up to **3 days** from when you receive this assignment. You do not need to start the moment the email arrives.
+
+**Expected effort:** about **4–8 hours** of focused work. This is not a 60-minute curl demo. We expect a small service you would defend in a code review: data model, duplicate identity, concurrent writes, invoice snapshot, tests.
 
 **You complete only this task.** Do not build receipt OCR, auto-itemize, receipt upload, or inventory.
 
-**Language:** Navan production code is mostly **Java**. Implement this task in **Java and Spring** (Spring Boot is fine).
+**Language:** Navan production code is mostly **Java**. Implement this task in **Java and Spring** (Spring Boot is fine) unless you have a strong reason not to. Another stack is not an automatic fail, but Java + Spring is what we will compare you against.
 
 We care that the API runs, duplicates are rejected under concurrency, an invoice is a frozen snapshot, and the design is something you would ship — not a single file that does routing and storage in one class.
 
+---
+
+## Using an LLM (allowed)
+
+You **may** use ChatGPT, Cursor, or any other LLM **to help you write the code**. Paste this brief and the fixtures into your local tools.
+
+You **do not** need to call an LLM from the running service. Transactions and invoices are stored records. Do not generate invoice lines by asking a model at create or `GET` time.
+
+If you *do* call a vendor for any optional helper:
+
+- Put the key in an **environment variable** (or a `.env` file that is **gitignored**).
+- README: how to set the variable, then run.
+- **Do not commit API keys**, tokens, or credential files. A placeholder such as `YOUR_KEY` is fine. A real key in the repo is an automatic fail.
+
+We will not ask you for your key. Scoring uses your README, tests, and the fixtures.
+
+---
 
 ## Product context
 

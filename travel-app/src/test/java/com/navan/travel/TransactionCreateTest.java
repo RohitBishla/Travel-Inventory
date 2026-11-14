@@ -76,7 +76,17 @@ class TransactionCreateTest extends ApiTestBase {
         ObjectNode car = Fixtures.seed("flight", "car-1");
         car.put("type", "car");
 
-        assertRejected(car);
+        ApiResponse response = assertRejected(car);
+        assertThat(response.body().get("details").get(0).stringValue())
+                .isEqualTo("type must be one of: flight, hotel, rail, navan_fee");
+    }
+
+    @Test
+    void rejectsTypeSentAsEnumOrdinal() {
+        ObjectNode ordinal = Fixtures.seed("flight", "ordinal-1");
+        ordinal.put("type", 1);
+
+        assertRejected(ordinal);
     }
 
     @Test

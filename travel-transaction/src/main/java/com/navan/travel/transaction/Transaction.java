@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
+import com.navan.travel.transaction.metadata.FeeKind;
 import com.navan.travel.transaction.metadata.NavanFeeMetadata;
 import com.navan.travel.transaction.metadata.TransactionMetadata;
 
@@ -21,11 +22,8 @@ public record Transaction(
         Instant createdAt,
         Instant updatedAt) {
 
-    public String billingCategory() {
-        if (metadata instanceof NavanFeeMetadata navanFee) {
-            return navanFee.feeKind().code();
-        }
-        return type.code();
+    public FeeKind feeKind() {
+        return metadata instanceof NavanFeeMetadata navanFee ? navanFee.feeKind() : null;
     }
 
     public TransactionDraft withChanges(TransactionChanges changes, TransactionMetadata changedMetadata) {

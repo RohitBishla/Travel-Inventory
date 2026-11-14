@@ -7,11 +7,12 @@ import java.util.List;
 import com.navan.travel.transaction.FeeLine;
 import com.navan.travel.transaction.NewTransaction;
 import com.navan.travel.transaction.TaxLine;
+import com.navan.travel.transaction.TransactionType;
 
 import tools.jackson.databind.JsonNode;
 
 public record CreateTransactionRequest(
-        String type,
+        TransactionType type,
         String externalId,
         String currency,
         Instant occurredAt,

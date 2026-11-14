@@ -8,11 +8,12 @@ import com.navan.travel.common.ValidationException;
 import com.navan.travel.transaction.FeeLine;
 import com.navan.travel.transaction.TaxLine;
 import com.navan.travel.transaction.TransactionChanges;
+import com.navan.travel.transaction.TransactionType;
 
 import tools.jackson.databind.JsonNode;
 
 public record PatchTransactionRequest(
-        String type,
+        TransactionType type,
         String externalId,
         String currency,
         Instant occurredAt,

@@ -79,7 +79,7 @@ In Java the same structure is a `Transaction` record holding `List<TaxLine>`, `L
 
 Concurrent POSTs all pass step 1, and the index lets exactly one commit. This holds across any number of instances because nothing depends on JVM state. `DuplicateExternalIdTest` fires 16 simultaneous POSTs per round for five rounds; with debug logging on, most of the 75 losers are caught by the index at step 4, not by the pre-check.
 
-**Contract:** duplicate → `409 Conflict`, body `{"error":"duplicate_external_id","id":"<existing id>",…}` and a `Location` header. The stored row is never modified by a duplicate. A client that times out can safely retry a create.
+**Contract:** duplicate → `409 Conflict`, body `{"error":"duplicate_external_id","transaction_id":"<existing id>",…}` (a transaction's server id is always named `transaction_id`, in the 201 body too) and a `Location` header. The stored row is never modified by a duplicate. A client that times out can safely retry a create.
 
 ## 4. Invoice snapshot
 
@@ -88,7 +88,7 @@ Creating an invoice copies; it never links.
 | Stored | Content |
 |---|---|
 | `invoices` | `currency`, `total`, `line_count`, `version`, timestamps |
-| `invoice_lines` | One per transaction: `line_no`, `transaction_id` and the copy: `external_id`, `type`, `category`, `currency`, `occurred_at`, `total`, `transaction_version`, `metadata` (the typed metadata serialised to JSON text, returned verbatim) |
+| `invoice_lines` | One per transaction: `line_no`, `transaction_id` and the copy: `external_id`, `type`, `category`, `currency`, `occurred_at`, `total`, `transaction_version`, `metadata` (the typed metadata serialised to JSON text, returned verbatim). `CHECK` constraints on `type` and `category` (V3). |
 | `invoice_line_tax_lines`, `invoice_line_fee_lines` | Copies of the transaction's lines, still decimal columns |
 | `invoice_tax_rollups`, `invoice_fee_rollups` | Rollups, computed once at write time |
 
@@ -97,7 +97,7 @@ Creating an invoice copies; it never links.
 **Rules.**
 
 - Tax rollup groups by `(name, rate)`; fee rollup by `name`. Names are trimmed, rates compare numerically (`0.07` = `0.070000`), a missing rate is its own group, order is first appearance.
-- `totals` holds one entry per category plus `grand_total`. The category is the type, except `navan_fee` splits by `fee_kind`, matching `expected-invoice.json`. `grand_total` is the sum of transaction totals.
+- `totals` holds one entry per category plus `grand_total`. The category is the type, except `navan_fee` splits by `fee_kind`, matching `expected-invoice.json`. Each frozen line keeps its `TransactionType` and, for `navan_fee`, its `FeeKind`; the category is the fee kind when there is one, otherwise the type. `totals` are listed by type, then fee kind, in enum order (`flight`, `hotel`, `rail`, `trip_fee`, `agent_call_fee`). `transaction_types_included` and `navan_fee_kinds_included` are also derived from the frozen lines at read time, deduplicated and in enum order. `grand_total` is the sum of transaction totals.
 - Mixed currencies: 409 `mixed_currency`. The same id twice in one request: 409 `duplicate_transaction_id` (also enforced by `UNIQUE (invoice_id, transaction_id)`). Any missing id: 404 naming it. At most 100 ids.
 - A transaction may be on several invoices (the fixture shows single-id and trip invoices over the same flight).
 

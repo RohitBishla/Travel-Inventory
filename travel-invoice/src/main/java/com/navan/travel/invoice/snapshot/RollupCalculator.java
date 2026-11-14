@@ -1,6 +1,7 @@
 package com.navan.travel.invoice.snapshot;
 
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,11 +36,15 @@ public final class RollupCalculator {
                 .toList();
     }
 
+    private static final Comparator<InvoiceLine> BY_TYPE_THEN_FEE_KIND = Comparator
+            .comparing(InvoiceLine::type)
+            .thenComparing(InvoiceLine::feeKind, Comparator.nullsFirst(Comparator.naturalOrder()));
+
     public static Map<String, BigDecimal> totalsByCategory(List<InvoiceLine> lines) {
         Map<String, BigDecimal> totals = new LinkedHashMap<>();
-        for (InvoiceLine line : lines) {
-            totals.merge(line.category(), line.total(), BigDecimal::add);
-        }
+        lines.stream()
+                .sorted(BY_TYPE_THEN_FEE_KIND)
+                .forEach(line -> totals.merge(line.category(), line.total(), BigDecimal::add));
         return totals;
     }
 

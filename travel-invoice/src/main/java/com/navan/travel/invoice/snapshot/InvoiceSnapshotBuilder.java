@@ -42,7 +42,7 @@ public class InvoiceSnapshotBuilder {
                 transaction.id(),
                 transaction.externalId(),
                 transaction.type(),
-                transaction.billingCategory(),
+                transaction.feeKind(),
                 transaction.currency(),
                 transaction.occurredAt(),
                 transaction.total(),
