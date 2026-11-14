@@ -12,7 +12,7 @@ import com.navan.travel.transaction.TransactionType;
 import com.navan.travel.transaction.metadata.TransactionMetadata;
 
 public record TransactionResponse(
-        String id,
+        String transactionId,
         TransactionType type,
         String externalId,
         String currency,

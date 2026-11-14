@@ -65,9 +65,10 @@ class TransactionCreateTest extends ApiTestBase {
         ApiResponse response = api.post("/transactions", Fixtures.seed("rail"));
 
         assertThat(response.status()).isEqualTo(201);
-        assertThat(response.id()).startsWith("txn_");
-        assertThat(response.headers().firstValue("Location")).hasValue("/transactions/" + response.id());
-        assertThat(api.get("/transactions/" + response.id()).body()).isEqualTo(response.body());
+        assertThat(response.transactionId()).startsWith("txn_");
+        assertThat(response.body().has("id")).isFalse();
+        assertThat(response.headers().firstValue("Location")).hasValue("/transactions/" + response.transactionId());
+        assertThat(api.get("/transactions/" + response.transactionId()).body()).isEqualTo(response.body());
     }
 
     @Test

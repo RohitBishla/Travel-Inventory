@@ -27,6 +27,7 @@ class InvoiceCreateTest extends ApiTestBase {
 
         assertThat(response.status()).isEqualTo(201);
         JsonNode invoice = api.get("/invoices/" + response.id()).body();
+        assertThat(valuesOf(invoice.get("transaction_ids"))).containsExactlyElementsOf(ids.values());
         assertThat(text(invoice, "currency")).isEqualTo(text(expected, "currency"));
         assertThat(decimal(invoice.get("total"))).isEqualByComparingTo("685.70");
         expected.get("totals").properties().forEach(total ->
@@ -59,6 +60,7 @@ class InvoiceCreateTest extends ApiTestBase {
         assertThat(response.status()).isEqualTo(201);
         assertThat(decimal(response.body().get("total"))).isEqualByComparingTo("220.00");
         assertThat(response.body().get("lines")).hasSize(1);
+        assertThat(valuesOf(response.body().get("transaction_ids"))).containsExactly(flightId);
     }
 
     @Test

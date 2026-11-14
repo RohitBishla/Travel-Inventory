@@ -17,6 +17,7 @@ import com.navan.travel.transaction.TransactionType;
 
 public record InvoiceResponse(
         String id,
+        List<String> transactionIds,
         String currency,
         BigDecimal total,
         Map<String, BigDecimal> totals,
@@ -31,12 +32,14 @@ public record InvoiceResponse(
         InvoiceSnapshot snapshot = invoice.snapshot();
         Map<String, BigDecimal> totals = new LinkedHashMap<>(snapshot.totalsByCategory());
         totals.put("grand_total", snapshot.total());
+        List<Line> lines = snapshot.lines().stream().map(Line::from).toList();
         return new InvoiceResponse(
                 PublicIds.invoice(invoice.id()),
+                lines.stream().map(Line::transactionId).toList(),
                 snapshot.currency(),
                 snapshot.total(),
                 totals,
-                snapshot.lines().stream().map(Line::from).toList(),
+                lines,
                 snapshot.taxRollup(),
                 snapshot.feeRollup(),
                 invoice.version(),

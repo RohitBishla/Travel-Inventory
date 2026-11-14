@@ -55,7 +55,7 @@ Each module's unit tests run first. Then the `travel-app` tests start the app on
 
 | Method | Path | Success | Errors |
 |---|---|---|---|
-| `POST` | `/transactions` | 201 + `Location` | 400 invalid, 409 duplicate `external_id` (body carries the existing `id`) |
+| `POST` | `/transactions` | 201 + `Location` | 400 invalid, 409 duplicate `external_id` (body carries the existing `transaction_id`) |
 | `GET` | `/transactions/{id}` | 200 | 404 |
 | `GET` | `/transactions?limit=&cursor=` | 200 | 400 bad `limit` or cursor |
 | `PATCH` | `/transactions/{id}` | 200 | 400, 404, 409 if on an invoice |
@@ -70,7 +70,7 @@ Errors share one shape: `{"error": "<code>", "message": "...", "details": [...]}
 
 Conventions:
 
-- **Ids** are `txn_<n>` and `inv_<n>`.
+- **Ids** are `txn_<n>` and `inv_<n>`. A transaction carries its id as `transaction_id`; an invoice as `id`, with its transactions in `transaction_ids`.
 - **Money** is a JSON number with at most the currency's minor units (EUR: 2 decimals). Amounts are stored as `NUMERIC(19,4)` and never rounded.
 - **Lists** return newest first: `{"items": [...], "limit": 50, "next_cursor": "..."}`. `limit` defaults to 50 and is capped at 100. Pass `next_cursor` back as `cursor`; it is absent on the last page.
 - **PATCH /transactions** accepts `occurred_at`, `total`, `tax_lines`, `fee_lines`, `metadata`; each field sent replaces the stored one. `type`, `external_id` and `currency` cannot be changed.
@@ -100,7 +100,7 @@ post /transactions "$(jq .agent_call_fee $SEEDS)"   # txn_5
 
 ```bash
 post /transactions "$(jq .duplicate_flight $SEEDS)"
-# 409 {"error":"duplicate_external_id","message":"...","id":"txn_1"}
+# 409 {"error":"duplicate_external_id","message":"...","transaction_id":"txn_1"}
 
 post /transactions "$(jq .duplicate_flight $SEEDS)"
 # 409 again, same id
@@ -114,7 +114,7 @@ curl -s "$API/transactions?limit=100" \
 
 ```bash
 curl -s $API/transactions/txn_1 | jq .metadata.coupons
-curl -s "$API/transactions?limit=2" | jq '{ids: [.items[].id], next_cursor}'
+curl -s "$API/transactions?limit=2" | jq '{ids: [.items[].transaction_id], next_cursor}'
 curl -s "$API/transactions?limit=2&cursor=<next_cursor from the previous call>"
 ```
 
@@ -154,7 +154,7 @@ curl -s -X DELETE $API/transactions/txn_1
 ### Get and list invoices
 
 ```bash
-curl -s $API/invoices/inv_2 | jq '{total, totals, tax_rollup, fee_rollup}'
+curl -s $API/invoices/inv_2 | jq '{transaction_ids, total, totals, tax_rollup, fee_rollup}'
 curl -s "$API/invoices?limit=10" | jq '.items[] | {id, total, line_count}'
 ```
 
@@ -166,7 +166,7 @@ curl -s -X PATCH $API/invoices/inv_1 -H 'Content-Type: application/json' \
 # snapshot rebuilt from current data: total 425.70, version 2
 
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE $API/invoices/inv_1   # 204
-curl -s $API/transactions/txn_2 | jq .id                                  # still there
+curl -s $API/transactions/txn_2 | jq .transaction_id                      # still there
 ```
 
 ### Validation and mixed currency

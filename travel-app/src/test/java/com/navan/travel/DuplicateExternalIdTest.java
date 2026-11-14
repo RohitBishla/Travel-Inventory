@@ -31,7 +31,7 @@ class DuplicateExternalIdTest extends ApiTestBase {
 
         assertThat(duplicate.status()).isEqualTo(409);
         assertThat(duplicate.error()).isEqualTo("duplicate_external_id");
-        assertThat(duplicate.id()).isEqualTo(flightId);
+        assertThat(duplicate.transactionId()).isEqualTo(flightId);
         assertThat(duplicate.headers().firstValue("Location")).hasValue("/transactions/" + flightId);
         assertThat(countTransactionsWithExternalId(FLIGHT_EXTERNAL_ID)).isEqualTo(1);
     }
@@ -60,8 +60,8 @@ class DuplicateExternalIdTest extends ApiTestBase {
                 List<ApiResponse> conflicts = responses.stream().filter(r -> r.status() == 409).toList();
                 assertThat(created).as("round %d", round).hasSize(1);
                 assertThat(conflicts).hasSize(CONCURRENT_CLIENTS - 1);
-                String winnerId = created.getFirst().id();
-                assertThat(conflicts).allSatisfy(conflict -> assertThat(conflict.id()).isEqualTo(winnerId));
+                String winnerId = created.getFirst().transactionId();
+                assertThat(conflicts).allSatisfy(conflict -> assertThat(conflict.transactionId()).isEqualTo(winnerId));
                 assertThat(countTransactionsWithExternalId(externalId)).isEqualTo(1);
             }
             assertThat(countRows("flight_details")).isEqualTo(ROUNDS);

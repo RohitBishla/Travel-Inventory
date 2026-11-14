@@ -41,7 +41,7 @@ class PaginationTest extends ApiTestBase {
         String path = "/transactions?limit=25";
         while (path != null) {
             JsonNode page = api.get(path).body();
-            page.get("items").forEach(item -> seen.add(text(item, "id")));
+            page.get("items").forEach(item -> seen.add(text(item, "transaction_id")));
             path = page.has("next_cursor") ? "/transactions?limit=25&cursor=" + text(page, "next_cursor") : null;
         }
 
@@ -75,7 +75,7 @@ class PaginationTest extends ApiTestBase {
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             ApiResponse response = api.post("/transactions", Fixtures.navanFee("fee-" + i, "EUR"));
-            ids.add(response.id());
+            ids.add(response.transactionId());
         }
         return ids;
     }

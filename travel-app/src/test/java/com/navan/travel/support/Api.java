@@ -43,7 +43,7 @@ public final class Api {
     public String createTransaction(JsonNode body) {
         ApiResponse response = post("/transactions", body);
         assertThat(response.status()).as("create transaction: %s", response.body()).isEqualTo(201);
-        return response.id();
+        return response.transactionId();
     }
 
     public ApiResponse createInvoice(List<String> transactionIds) {

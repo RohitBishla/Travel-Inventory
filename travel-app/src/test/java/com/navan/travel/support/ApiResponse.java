@@ -10,6 +10,10 @@ public record ApiResponse(int status, JsonNode body, HttpHeaders headers) {
         return TestJson.text(body, "id");
     }
 
+    public String transactionId() {
+        return TestJson.text(body, "transaction_id");
+    }
+
     public String error() {
         return TestJson.text(body, "error");
     }
