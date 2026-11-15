@@ -1,8 +1,6 @@
 package com.navan.travel.common;
 
-/**
- * @param after the last row of the previous page; this page holds the rows older than it
- */
+/** @param after last row of the previous page, or null for the first page */
 public record PageQuery(int limit, PagePosition after) {
 
     public static final int DEFAULT_LIMIT = 50;

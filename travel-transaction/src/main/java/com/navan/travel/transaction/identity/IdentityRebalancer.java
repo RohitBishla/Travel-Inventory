@@ -13,9 +13,8 @@ import com.navan.travel.common.shard.Shards;
 import com.navan.travel.transaction.identity.ExternalIdentity.IdentityRecord;
 
 /**
- * After a shard is added, moves each {@code external_ids} record to its owner on the new ring. A record is copied
- * before it is removed, so at every moment it exists on its old owner, its new owner or both; creates during the
- * move look in both (see {@link Shards#identityShards}). Safe to run again.
+ * Run after adding a shard: moves each external_ids record to its new owner. Copy first, delete second, so a
+ * create (which checks the old owner too meanwhile) always finds it. Safe to run again.
  */
 @Component
 public class IdentityRebalancer {

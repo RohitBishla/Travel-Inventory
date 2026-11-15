@@ -11,10 +11,7 @@ import com.navan.travel.invoice.persistence.InvoiceLinkRepository;
 import com.navan.travel.invoice.persistence.InvoiceSnapshotRepository;
 import com.navan.travel.transaction.InvoiceUsage;
 
-/**
- * Answers "is this transaction billed?" for a caller that holds the transaction's row lock on its shard.
- * The links on that shard name candidate invoices; each invoice's own shard has the final word.
- */
+/** Caller holds the transaction's row lock. Links name candidate invoices; the invoice's shard has the final say. */
 @Component
 class BilledTransactionCheck implements InvoiceUsage {
 

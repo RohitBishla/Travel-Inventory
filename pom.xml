@@ -27,6 +27,8 @@
     <properties>
         <java.version>21</java.version>
         <springdoc.version>3.2.0</springdoc.version>
+        <jacoco.version>0.8.16</jacoco.version>
+        <sonar.coverage.jacoco.xmlReportPaths>${maven.multiModuleProjectDirectory}/travel-app/target/site/jacoco-aggregate/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
     </properties>
 
     <dependencyManagement>
@@ -55,6 +57,20 @@
     </dependencyManagement>
 
     <build>
+        <plugins>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
         <pluginManagement>
             <plugins>
                 <plugin>

@@ -5,9 +5,7 @@ import javax.sql.DataSource;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/**
- * @param id stable for the life of the shard: it names the shard on the hash ring and is the id lane it issues
- */
+/** @param id never changes: it is the shard's place on the ring and its id lane */
 public record Shard(int id, DataSource dataSource, JdbcClient jdbc, TransactionTemplate transactions) {
 
     @Override

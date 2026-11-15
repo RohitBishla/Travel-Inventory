@@ -34,10 +34,9 @@ import com.navan.travel.transaction.Transaction;
 import com.navan.travel.transaction.TransactionService;
 
 /**
- * An invoice lives on its home shard, the lowest shard holding one of its transactions, and takes its id from
- * there, so the id names the home. A write opens a database transaction on every shard involved in ascending
- * order and the innermost commits first. That order keeps "billed" reliable without a distributed commit:
- * links reach each transaction's shard before the invoice commits, and are removed only after it lets go.
+ * An invoice lives on the lowest shard among its transactions. Writes open one transaction per shard, in shard
+ * order, and the inner ones commit first: links to an invoice exist before it does and go only after it does.
+ * That keeps "is it billed?" right without a distributed commit.
  */
 @Service
 public class InvoiceService {

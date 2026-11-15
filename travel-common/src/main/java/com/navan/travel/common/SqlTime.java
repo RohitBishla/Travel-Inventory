@@ -6,9 +6,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
-/**
- * Timestamps are stored as {@code DATETIME(6)} holding UTC wall-clock time, so no session time zone is involved.
- */
+/** Timestamps are DATETIME(6) in UTC, so the session time zone never matters. */
 public final class SqlTime {
 
     private SqlTime() {

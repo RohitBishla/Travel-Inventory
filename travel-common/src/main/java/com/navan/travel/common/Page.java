@@ -6,11 +6,7 @@ import java.util.function.Function;
 
 public record Page<T>(List<T> items, int limit, PagePosition next) {
 
-    /**
-     * Merges pages read from several shards. Each shard returns up to {@code fetchSize} rows older than the cursor,
-     * newest first; the newest {@code fetchSize} of all of them are the rows one table would return. One row beyond
-     * {@code limit} means another page exists.
-     */
+    /** Each shard sends its newest rows past the cursor; the newest of all of them make the page. */
     public static <T> Page<T> mergeOverfetched(List<List<T>> rowsPerShard,
                                                PageQuery query,
                                                Function<T, PagePosition> positionOf) {

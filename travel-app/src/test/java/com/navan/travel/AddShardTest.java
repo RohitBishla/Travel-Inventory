@@ -24,10 +24,7 @@ import com.navan.travel.support.ApiResponse;
 import com.navan.travel.support.Fixtures;
 import com.navan.travel.transaction.identity.IdentityRebalancer;
 
-/**
- * The README procedure for adding a shard, run end to end on three databases: two shards with data, then three
- * shards with previous-ring set, then a rebalance, then three shards on their own.
- */
+/** The README "Adding a shard" steps, end to end: 2 shards, then 3 with previous-ring, rebalance, then 3. */
 class AddShardTest {
 
     private static final String HOST = System.getenv().getOrDefault("TEST_DATABASE_HOST", "localhost");

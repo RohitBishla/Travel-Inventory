@@ -10,11 +10,8 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 
 /**
- * Consistent hashing. Each shard owns {@value #VIRTUAL_NODES} points on a ring of 64-bit positions; a key belongs to
- * the first point at or after its own position. Adding a shard only takes keys away from the others, about 1/N of
- * them, and never moves a key between two shards that were already there.
- *
- * <p>Positions are the first 8 bytes of SHA-256: of {@code "shard-<id>#<n>"} for points, of the UTF-8 key for keys.
+ * Consistent hashing: 256 points per shard on a SHA-256 ring. Adding a shard moves about 1/N of the keys,
+ * all of them to the new shard.
  */
 public final class HashRing {
 

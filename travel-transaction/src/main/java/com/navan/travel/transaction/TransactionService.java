@@ -87,10 +87,7 @@ public class TransactionService {
         }));
     }
 
-    /**
-     * Deletes the row first and its uniqueness record after, so a failure in between leaves a record pointing at
-     * nothing, which {@link #rejectIfTaken} recognises, never a row without its record.
-     */
+    /** Row first, uniqueness record after: a record left behind points at nothing and the next create clears it. */
     public void delete(long id) {
         String externalId = retry.run(() -> shards.inTransaction(shardOf(id), () -> {
             lockUnbilled(id);
@@ -107,9 +104,7 @@ public class TransactionService {
         }
     }
 
-    /**
-     * Locks and loads transactions that all live on the shard of the surrounding {@link Shards#inTransaction}.
-     */
+    /** Call inside a transaction on the shard these ids live on. */
     public List<Transaction> lockForInvoicing(List<Long> ids) {
         List<Long> lockedIds = writer.lockByIds(ids.stream().sorted().toList());
         if (lockedIds.size() != ids.size()) {

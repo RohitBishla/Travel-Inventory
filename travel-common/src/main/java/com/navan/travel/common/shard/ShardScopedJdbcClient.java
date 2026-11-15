@@ -2,10 +2,7 @@ package com.navan.travel.common.shard;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-/**
- * The {@link JdbcClient} that repositories inject. Each statement goes to the shard selected by the
- * surrounding {@link Shards#read} or {@link Shards#inTransaction} call.
- */
+/** What repositories inject: each statement goes to the shard picked by the surrounding {@link Shards} call. */
 public class ShardScopedJdbcClient implements JdbcClient {
 
     private final Shards shards;

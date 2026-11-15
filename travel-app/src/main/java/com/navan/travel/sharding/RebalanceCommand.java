@@ -8,10 +8,7 @@ import org.springframework.stereotype.Component;
 
 import com.navan.travel.transaction.identity.IdentityRebalancer;
 
-/**
- * {@code --rebalance}: move external_id records to their owners on the current ring, then exit.
- * Run after adding a shard, with {@code previous-ring} still set; see the README.
- */
+/** {@code --rebalance}: move external_id records after adding a shard, then exit (see README). */
 @Component
 class RebalanceCommand implements ApplicationRunner {
 

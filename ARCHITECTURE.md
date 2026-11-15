@@ -6,32 +6,43 @@ The service is built to **scale out** (more app instances, and rows spread over 
 
 ## 1. Shape
 
-```
-clients ──HTTP──▶  app instance 1..N       stateless: no cache, no in-JVM locks, no sessions
-                   ├─ travel-app           controllers, DTOs, public ids, paging, error mapping, shard pools
-                   ├─ travel-invoice       service · snapshot + rollup · persistence · billing links
-                   ├─ travel-transaction   service · validation · identity · persistence
-                   └─ travel-common        money · paging · ids · retry · shard routing
-                          │  one bounded pool per shard; lock-wait and statement timeouts
-                ┌─────────┴─────────┐
-                ▼                   ▼
-          travel_shard_0      travel_shard_1       same schema on both; InnoDB
-          ids 1, 65, 129…     ids 2, 66, 130…      keys placed on a consistent-hash ring
+```mermaid
+flowchart TB
+    C["Clients"] -->|"HTTP + JSON"| LB["Load balancer"]
+    LB --> APP
+    subgraph APP["App instance x N (stateless)"]
+        API["travel-app<br/>controllers, DTOs, errors,<br/>Swagger, health"]
+        INV["travel-invoice<br/>InvoiceService, snapshot + rollups,<br/>BilledTransactionCheck"]
+        TXN["travel-transaction<br/>TransactionService, validation,<br/>external_ids, IdentityRebalancer"]
+        COM["travel-common<br/>Shards + HashRing, retry,<br/>paging, money"]
+        API --> INV
+        API --> TXN
+        INV -->|"InvoiceUsage"| TXN
+        INV --> COM
+        TXN --> COM
+    end
+    COM -->|"ids 1, 65, 129..."| S0
+    COM -->|"ids 2, 66, 130..."| S1
+    subgraph DB["MariaDB"]
+        S0[("travel_shard_0<br/>13 tables")]
+        S1[("travel_shard_1<br/>13 tables")]
+    end
+    S0 <-.->|"invoice_links can point<br/>across shards"| S1
 ```
 
-**Modules.** The seams are Maven modules, so the build enforces the dependency direction `travel-app → travel-invoice → travel-transaction → travel-common`. The transaction module cannot reach invoice code. It asks "is this transaction billed?" through the `InvoiceUsage` interface it declares, and the invoice module implements it (`BilledTransactionCheck`). Each module owns the migration for its own tables (`V1` transactions, `V2` invoices); `ShardingConfig` runs both on every shard at start.
+**Modules.** The seams are Maven modules, so the build enforces the dependency direction `travel-app → travel-invoice → travel-transaction → travel-common`. The transaction module cannot reach invoice code. It asks "is this transaction billed?" through the `InvoiceUsage` interface it declares, and the invoice module implements it (`BilledTransactionCheck`). Each module owns the migration for its own tables (`V1` transactions, `V2` invoices); `qShardingConfig` runs both on every shard at start.
 
 | Seam | Code | Owns |
 |---|---|---|
 | HTTP | `travel-app`: `api.*Controller`, `ApiExceptionHandler` | Routing, DTOs, wire ids (`txn_…`, `inv_…`), cursors, exception → status. No SQL, no rules. |
 | Sharding | `travel-common`: `shard.Shards`; `travel-app`: `sharding.ShardingConfig` | Which shard a key or id lives on; running repository code on that shard; one pool, transaction manager and Flyway run per shard. |
 | Transaction persistence | `travel-transaction`: `transaction.persistence` | `TransactionWriter` (writes and row locks) and `TransactionLoader` (batched reads); package-private repositories behind them. |
-| Duplicate identity | `transaction.identity.ExternalIdentity` | `external_id` lookup and recognising a violation of `uq_transactions_external_id`. |
+| Duplicate identity | `transaction.identity` | `ExternalIdentity`: the `external_ids` record, lookups and recognising a unique violation. `IdentityRebalancer`: moves records after a shard is added. |
 | Input rules | `TransactionDraftFactory` | Turns a create request or a patch into a validated draft. |
 | Snapshot and rollup | `travel-invoice`: `invoice.snapshot` | Stored transactions → frozen lines, rollups, totals. No database access. |
 | Use cases | `TransactionService`, `InvoiceService` | Which shard, database transaction boundaries, lock and commit order, the 409 rules, retries. |
 
-**Stack:** Java 21, Spring Boot 4.1, Spring JDBC (`JdbcClient`) with hand-written SQL, Flyway, MariaDB (InnoDB; MySQL 8 works too). There is no ORM: the hard parts here are SQL-shaped (unique-violation handling, row locks, keyset pages, batched child loads), and every statement the service runs is visible in a repository.
+**Stack:** Java 21, Spring Boot 4.1, Spring JDBC (`JdbcClient`) with hand-written SQL, Flyway, MariaDB (InnoDB). There is no ORM: the hard parts here are SQL-shaped (unique-violation handling, row locks, keyset pages, batched child loads), and every statement the service runs is visible in a repository.
 
 **How repositories reach a shard.** Repositories inject one `JdbcClient`, which is `ShardScopedJdbcClient`: every statement goes to the shard chosen by the surrounding `shards.read(shard, …)` or `shards.inTransaction(shard, …)` call in a service. A repository call outside such a scope fails immediately instead of guessing. Each shard has its own `DataSource` and transaction manager, so a service can hold open transactions on both shards at once.
 
@@ -64,6 +75,28 @@ Deleting a transaction removes its row first and its uniqueness record after (wh
 2. With everything locked, it builds the snapshot, writes the invoice and its lines on the home shard, and writes a link on each transaction's shard.
 3. The inner transactions commit first and the home commits last. So **a link always exists before its invoice line is visible**. Removing works the other way: `PATCH` and `DELETE /invoices` commit the invoice first and remove links afterwards.
 
+The trip invoice from the fixtures, which spans both shards:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as InvoiceService
+    participant H as Shard 0 (home)
+    participant O as Shard 1
+    C->>S: POST /invoices (5 transaction ids)
+    S->>H: BEGIN, lock its 4 transactions FOR UPDATE
+    S->>O: BEGIN, lock the trip fee FOR UPDATE
+    S->>S: build snapshot: one currency, totals 685.70
+    S->>H: INSERT invoice + invoice_lines (frozen copies)
+    S->>H: INSERT invoice_links for its 4 transactions
+    S->>O: INSERT invoice_link for the trip fee
+    S->>O: COMMIT (links first)
+    S->>H: COMMIT (invoice last)
+    S-->>C: 201 inv_65
+    Note over O,H: Crash between 8 and 9: links without an invoice.<br/>Harmless: the next PATCH sees no invoice line and removes the link.
+```
+
 A missing link therefore always means "not billed". A link can outlive its reason: the invoice commit failed after the links committed, the process died between the two, or the post-commit unlink failed. `BilledTransactionCheck` handles that. `PATCH` and `DELETE /transactions/{id}` hold the transaction's row lock, read its links, and ask each linked invoice's home shard with a **locking read** (`SELECT … LOCK IN SHARE MODE` on `invoice_lines`). A line written by an invoice that has not committed yet is waited for, not missed. If the line exists, 409. If not, the link is a leftover: it is deleted and the edit goes ahead. Leftovers cost nothing until met and are cleaned up when they are.
 
 Live check, against the real server: 30 concurrent PATCHes on a shard-1 transaction raced 10 concurrent trip invoices homed on shard 0. One PATCH committed first; all 10 invoices froze that version (v2, 101.00); the other 29 PATCHes got 409; shard 1 held exactly 10 links for 10 invoices. `ShardingTest` covers routing, link placement, the cross-shard 409, leftover-link cleanup and the `RESTRICT` guard.
@@ -87,10 +120,7 @@ transactions ─┬─ transaction_tax_lines        name, rate?, amount
 
 external_ids                                   external_id → transaction_id, on the key's ring owner
 
-invoices ─┬─ invoice_lines ─┬─ invoice_line_tax_lines
-          │                 └─ invoice_line_fee_lines
-          ├─ invoice_tax_rollups
-          └─ invoice_fee_rollups
+invoices ── invoice_lines                      frozen copy per transaction; tax_lines, fee_lines, metadata as JSON
 ```
 
 | Table | Key columns | Notes |
@@ -110,7 +140,7 @@ Child rows reference `transactions(id) ON DELETE CASCADE`, so deleting a transac
 
 In Java the same structure is a `Transaction` record holding `List<TaxLine>`, `List<FeeLine>` and a sealed `TransactionMetadata` with four records (`FlightMetadata`, `HotelMetadata`, `RailMetadata`, `NavanFeeMetadata`). `MetadataReader` picks the record from `type`, so a flight body cannot be stored as a hotel; `TransactionValidator` rejects `{}` and any missing required field. Unknown `type` or `fee_kind` is a 400. Unknown extra metadata keys are ignored, not stored.
 
-**Why child tables per type.** Typed columns get `NOT NULL` and `CHECK` constraints and can be indexed the day a query needs them (`flight_coupons.flight_number`); the schema documents the model. Single-table inheritance would still need child tables for coupons and legs. The cost is more statements per write, which is bounded (caps on list sizes) and, on reads, batched (§7). JSON is used where it fits: the frozen metadata copy on an invoice line (§5), which is immutable and always read whole.
+**Why child tables per type.** Typed columns get `NOT NULL` and `CHECK` constraints and can be indexed the day a query needs them (`flight_coupons.flight_number`); the schema documents the model. Single-table inheritance would still need child tables for coupons and legs. The cost is more statements per write, which is bounded (caps on list sizes) and, on reads, batched (§7). JSON is used where it fits: the frozen copies on an invoice line (§5), which are immutable and always read whole.
 
 **Money.** `DECIMAL(19,4)` in the database and `BigDecimal` in Java; JSON numbers are parsed straight to `BigDecimal`. An amount may carry at most the currency's ISO 4217 minor units (EUR 2, JPY 0); more precise input is a 400, never rounded. Responses render amounts at the currency's scale (`220.00`). Tax rates are fractions in `DECIMAL(9,6)` (`0.07`). `total` is the client's gross figure; tax and fee lines break it down and are not added on top. Timestamps are `DATETIME(6)` holding UTC, so no session time zone is involved.
 
@@ -120,7 +150,7 @@ In Java the same structure is a `Transaction` record holding `List<TaxLine>`, `L
 
 1. **Identity first.** On the owner (and, while a shard is being added, the previous owner), look up `external_id` (one index probe). If it exists and its row exists, answer 409 before validating the body. This is why the brief's `duplicate_flight` fixture (with `coupons: []`) gets 409, not 400.
 2. Validate the body (400 on failure).
-3. In one database transaction on the owner insert the header, the `external_ids` record, then tax lines, fee lines and type details. The header goes first, so a losing request fails before writing any child row.
+3. In one database transaction on the owner insert the header, then tax lines, fee lines and type details, then the `external_ids` record. The header goes first and has its own unique index on `external_id`, so a losing request fails before writing any child row.
 4. If the insert violates the unique index, the transaction rolls back, the winner's id is read, and the answer is 409. If the winner is not visible yet, the attempt is retried (§9) and ends in 409 once it is.
 
 Concurrent POSTs all pass step 1, and the index lets exactly one commit. This holds across any number of app instances, because every request for that key goes to the same shard. `DuplicateExternalIdTest` fires 16 simultaneous POSTs per round for five rounds.
@@ -134,11 +164,11 @@ Creating an invoice copies; it never links to live data.
 | Stored (on the invoice's home shard) | Content |
 |---|---|
 | `invoices` | `currency`, `total`, `line_count`, `version`, timestamps |
-| `invoice_lines` | One per transaction: `line_no`, `transaction_id` and the copy: `external_id`, `type`, `category`, `currency`, `occurred_at`, `total`, `transaction_version`, `metadata` (the typed metadata serialised to JSON text, returned verbatim). `CHECK` constraints on `type` and `category`. No foreign key to `transactions`: the transaction may be on the other shard. |
-| `invoice_line_tax_lines`, `invoice_line_fee_lines` | Copies of the transaction's lines, still decimal columns |
-| `invoice_tax_rollups`, `invoice_fee_rollups` | Rollups, computed once at write time |
+| `invoice_lines` | PK `(invoice_id, line_no)`, one per transaction: `transaction_id` and the copy: `external_id`, `type`, `category`, `currency`, `occurred_at`, `total`, `transaction_version`, and `tax_lines`, `fee_lines`, `metadata` as JSON text. `CHECK` constraints on `type` and `category`. No foreign key to `transactions`: the transaction may be on the other shard. |
 
-`GET /invoices/{id}` reads only the home shard's `invoice*` tables; no read path touches `transactions`. The per-category `totals` are summed from the frozen lines at read time, so they are frozen too. `InvoiceSnapshotTest` edits the stored flight's total, tax line and coupon with raw SQL and shows the invoice unchanged (flight 220.00, grand total 685.70).
+`GET /invoices/{id}` reads only the home shard's `invoice*` tables; no read path touches `transactions`. The per-category `totals` and the tax and fee rollups are computed from the frozen lines at read time, so they are frozen too.
+
+**Why JSON for the copied lines, but tables for the live ones.** A transaction's tax and fee lines are edited, validated and loaded in batches, so they get real decimal columns. The invoice's copies are written once, never changed, never queried by name, and always read whole with their line, so a JSON column is the simpler fit; amounts stay exact (`BigDecimal` in, `BigDecimal` out). This replaced four snapshot tables. `InvoiceSnapshotTest` edits the stored flight's total, tax line and coupon with raw SQL and shows the invoice unchanged (flight 220.00, grand total 685.70).
 
 **Rules.**
 
@@ -149,7 +179,7 @@ Creating an invoice copies; it never links to live data.
 
 **Three layers keep an invoice frozen:** PATCH or DELETE of an invoiced transaction returns 409 (§2 explains how across shards); `invoice_links` references `transactions` with `ON DELETE RESTRICT`; and the snapshot is a physical copy.
 
-`PATCH /invoices/{id}` rewrites the snapshot from the current transactions in one transaction on the home shard, after linking any newly added transactions; on 404 or 409 the old snapshot is untouched. Links to transactions it dropped are removed after it commits. `DELETE /invoices/{id}` cascades to its own lines and rollups, then removes its links. Once no invoice holds a transaction, it becomes editable again.
+`PATCH /invoices/{id}` rewrites the snapshot from the current transactions in one transaction on the home shard, after linking any newly added transactions; on 404 or 409 the old snapshot is untouched. Links to transactions it dropped are removed after it commits. `DELETE /invoices/{id}` cascades to its own lines, then removes its links. Once no invoice holds a transaction, it becomes editable again.
 
 ## 6. Concurrency: who locks what
 
@@ -159,7 +189,7 @@ Isolation is InnoDB's `REPEATABLE READ` plus explicit row locks (`SELECT … FOR
 |---|---|---|
 | `POST /transactions` | none; the unique index on the key's shard decides | |
 | `PATCH` / `DELETE /transactions/{id}` | transaction row (its shard), then a share lock on matching invoice lines (each linked invoice's shard) | exists; not billed |
-| `POST /invoices` | transaction rows, shard 0 then shard 1, ascending id within a shard | all exist; one currency |
+| `POST /invoices` | transaction rows, shards in ascending order, ascending id within a shard | all exist; one currency |
 | `PATCH /invoices/{id}` | invoice row (home), then transaction rows by shard and id | same |
 | `DELETE /invoices/{id}` | invoice row (home) | |
 
@@ -179,7 +209,7 @@ Isolation is InnoDB's `REPEATABLE READ` plus explicit row locks (`SELECT … FOR
 | "Is it billed?" on every PATCH/DELETE | Scans across shards | One primary-key probe of `invoice_links` on the transaction's own shard; only when a link exists, one unique-key probe of `invoice_lines` on the invoice's shard. |
 | Oversized requests | One request holding locks for long | Caps: 100 ids per invoice, 50 tax/fee/extra lines, 20 coupons or legs. |
 
-**Indexes** (in `V1__create_transaction_tables.sql` and `V2__create_invoice_tables.sql`, on every shard, asserted per shard by `SchemaTest`):
+**Indexes** (in `V1__create_transaction_tables.sql` and `V2__create_invoice_tables.sql`, on every shard; `SchemaTest` checks the uniqueness and billing ones on each shard):
 
 | Index | Serves |
 |---|---|
@@ -189,8 +219,7 @@ Isolation is InnoDB's `REPEATABLE READ` plus explicit row locks (`SELECT … FOR
 | Child PKs `(transaction_id, line_no / coupon_no / leg_no / extra_no)` | Ordered, batched child loads |
 | `invoice_links` PK `(transaction_id, invoice_id)` | "Is this transaction billed?" |
 | `invoices` PK, `ix_invoices_created_at_id` | `GET /invoices/{id}`, list pages |
-| `uq_invoice_lines_transaction (invoice_id, transaction_id)` | Lines of one invoice; no double count; the locking billing check |
-| `ix_invoice_lines_transaction_id` | Lines by transaction |
+| `invoice_lines` PK `(invoice_id, line_no)`, `uq_invoice_lines_transaction (invoice_id, transaction_id)` | Lines of one invoice in order; no double count; the locking billing check |
 
 **What fails first.** Hot rows, then each shard's write path. Lock waits on one hot transaction each hold a pooled connection (10 per shard); once a shard's pool is empty, requests for that shard queue. Lock-wait timeout (3 s), statement timeout (10 s) and pool-acquire timeout (3 s) turn that into fast 503s instead of a stall, and those 503s are safe to retry (§9). `DatabaseContentionTest` holds a row lock from a second connection and shows a PATCH returning 503 with `Retry-After` within seconds, then succeeding once the lock is released. Lists cost one query per shard, so they grow with the shard count, not the row count.
 
@@ -211,7 +240,7 @@ Next steps, not built: weights on the ring for shards of different sizes; a repl
 | Client times out and retries a create | Idempotent on `external_id`: 201 once, then 409 with the same id. |
 | Client retries PATCH or DELETE | PATCH replaces whole fields, so repeating it converges. A repeated DELETE returns 404. |
 | Lock-wait timeout, deadlock, racing insert not yet visible | `TransientFailureRetry` re-runs the whole operation up to 4 times with jittered backoff; safe because the failed attempt rolled back on every shard. Then 503. |
-| One shard unreachable | Requests that need it answer 503 with `Retry-After: 1`; single-shard requests on the other shard keep working, while lists and cross-shard invoices need both. At start-up both shards must be reachable for their migrations. `/health/readiness` reports each shard, `/health/liveness` does not include them, so a load balancer drains the instance without restarting it. |
+| One shard unreachable | Requests that need it answer 503 with `Retry-After: 1`; single-shard requests on the other shard keep working, while lists and cross-shard invoices need both. At start-up both shards must be reachable for their migrations. `/health/readiness` checks each shard, `/health/liveness` does not, so a load balancer drains the instance without restarting it. |
 | Instance stopped or redeployed | No local state to lose; graceful shutdown lets in-flight requests finish (20 s). |
 | Several instances start together | Flyway locks each shard's history table, so migrations run once per shard. |
 
@@ -234,3 +263,52 @@ Next steps, not built: weights on the ring for shards of different sizes; a repl
 | Hard delete | Soft delete | The brief asks for deletion; a deleted `external_id` can be reused. |
 | Flight needs ≥ 1 coupon, rail ≥ 1 leg, hotel `nights` = days between dates | Accept anything structurally valid | A ticket without a segment is not a ticket. |
 | `total` not cross-checked against its parts | Enforce fare + taxes + fees = total | Inclusive and exclusive pricing differ by type; the client's gross is authoritative. |
+
+## 11. Where this goes at high scale (not built)
+
+The brief rules out Redis, Kafka and lock services, and the current design does not need them to be correct. This is the target if traffic grew by orders of magnitude and the team split into several services. None of the correctness rules change: money stays decimal, `external_id` stays unique at one database index, invoices stay frozen copies, and "billed" still means a hold written before the invoice and released after it.
+
+```mermaid
+flowchart TB
+    U["Web, mobile, partner integrations"] --> EDGE["CDN + WAF"]
+    EDGE --> GW["API gateway<br/>OIDC auth, tenant from token,<br/>rate limits, Idempotency-Key"]
+
+    GW --> TS["Transaction service<br/>create, patch, delete, billing holds"]
+    GW --> IS["Invoice service<br/>snapshots, rollups"]
+    GW --> QS["Query service<br/>lists, search, filters"]
+
+    IS -->|"hold / release (sync API)"| TS
+
+    TS --> RC[("Redis cluster<br/>read cache, idempotency keys,<br/>rate-limit counters")]
+    IS --> RC
+    QS --> RC
+
+    TS --> TDB[("Transactions DB<br/>Vitess over MySQL/MariaDB<br/>sharded by tenant,<br/>primary + 2 replicas per shard")]
+    IS --> IDB[("Invoices DB<br/>Vitess, sharded by tenant")]
+
+    TDB -->|"outbox table, CDC (Debezium)"| K{{"Kafka<br/>transaction-events, invoice-events"}}
+    IDB -->|"outbox table, CDC"| K
+
+    K --> QP["Projector"] --> OS[("OpenSearch<br/>list and search indexes")]
+    QS --> OS
+    K --> DOC["Document service<br/>PDF and e-invoice"] --> S3[("Object storage")]
+    K --> DW[("Warehouse<br/>finance reporting")]
+
+    subgraph PLAT["Platform"]
+        OBS["OpenTelemetry, Prometheus, Grafana,<br/>Tempo traces, Loki logs, alerts"]
+        RUN["Kubernetes across 3 zones,<br/>autoscaling, secrets manager"]
+    end
+```
+
+| Piece | What it adds | What it replaces or changes here |
+|---|---|---|
+| API gateway | Authentication, a tenant id on every request, per-client rate limits, `Idempotency-Key` checks | The brief has no auth. With a tenant id, invoices and their transactions can share a shard, and `external_id` becomes unique per tenant, which is how booking references really behave. |
+| Transaction service | Owns transactions and the rule "a billed transaction cannot change" | Today's `travel-transaction` module. `invoice_links` become **billing holds** that it owns: the invoice service asks for a hold before committing an invoice and releases it after deleting one. That is the same ordering as today's links, now across services, so the design ports without a distributed commit. |
+| Invoice service | Owns snapshots and rollups | Today's `travel-invoice` module, with its own database. |
+| Redis | Cache-aside for `GET /transactions/{id}` and `GET /invoices/{id}`, idempotency keys, rate-limit counters | Invoices are immutable per version, so the key `inv:{id}:v{version}` never needs invalidating. Transactions are evicted on their change event. **Redis is never the source of truth**: uniqueness and billing still live in the database. It also closes today's known gap, idempotent `POST /invoices`. |
+| Outbox + CDC + Kafka | Every state change is published once, in the same database transaction that made it | Lets the read side, documents and reporting follow the write side without dual writes or polling. |
+| Query service + OpenSearch | Lists, filters and search, served from an index fed by events | Today's merge-across-shards on every page. One index query replaces N shard queries, and filters such as by date, type or traveller come almost free. Lists become eventually consistent, typically by under a second; reads by id stay on the primary path. |
+| Vitess | Sharding as infrastructure: routing, online resharding that moves rows, replicas, connection pooling | Today's `HashRing`, `ShardScopedJdbcClient`, id lanes and `rebalance` command. The idea is the same, but it runs in a proxy that also moves the rows. |
+| Read replicas | Cheap reads | `GET` by id and the projector's catch-up reads go to replicas; writes and locking reads stay on primaries. |
+| Document service + object storage | PDF and e-invoice rendering | Driven by `invoice-events`; the rendered file is immutable, like the snapshot. |
+| Observability | Traces across services, RED metrics per endpoint, alerts on 409/503 rates and consumer lag | Needed once a request crosses more than one process. |

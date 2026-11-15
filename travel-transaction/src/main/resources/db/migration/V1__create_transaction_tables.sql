@@ -1,5 +1,4 @@
--- Every shard has the same schema. external_id uses a binary no-pad collation so it is compared exactly,
--- byte for byte, the same way the shard router hashes it.
+-- Same schema on every shard. external_id is compared byte for byte, the same way it is hashed.
 
 CREATE TABLE transactions (
     id           BIGINT         NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -17,8 +16,7 @@ CREATE TABLE transactions (
 
 CREATE INDEX ix_transactions_created_at_id ON transactions (created_at, id);
 
--- Uniqueness of external_id lives on the key's owner on the hash ring. A new transaction is written on that same
--- shard, so both commit together; after a shard is added only these records move, never the transactions.
+-- Lives on the key's owner shard and keeps external_id unique. Only these rows move when a shard is added.
 CREATE TABLE external_ids (
     external_id    VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_nopad_bin NOT NULL,
     transaction_id BIGINT       NOT NULL,

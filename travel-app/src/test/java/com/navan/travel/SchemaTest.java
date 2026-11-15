@@ -44,11 +44,11 @@ class SchemaTest extends ApiTestBase {
     }
 
     @Test
-    void everyShardIndexesInvoiceLinesByTransactionId() throws SQLException {
+    void everyShardFindsTheInvoicesOfATransactionByIndex() throws SQLException {
         for (Shard shard : shards.all()) {
-            assertThat(indexesByColumn(shard, "invoice_lines", false).get("TRANSACTION_ID"))
+            assertThat(indexesByColumn(shard, "invoice_links", true).get("TRANSACTION_ID"))
                     .as("%s", shard)
-                    .contains("IX_INVOICE_LINES_TRANSACTION_ID");
+                    .contains("PRIMARY");
         }
     }
 

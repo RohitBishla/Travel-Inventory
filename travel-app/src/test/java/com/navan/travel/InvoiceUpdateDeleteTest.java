@@ -26,8 +26,7 @@ class InvoiceUpdateDeleteTest extends ApiTestBase {
         assertThat(api.get("/invoices/" + invoiceId).status()).isEqualTo(404);
         ids.values().forEach(id -> assertThat(api.get("/transactions/" + id).status()).isEqualTo(200));
         assertThat(countRows("invoice_lines")).isZero();
-        assertThat(countRows("invoice_line_tax_lines")).isZero();
-        assertThat(countRows("invoice_tax_rollups")).isZero();
+        assertThat(countRows("invoice_links")).isZero();
     }
 
     @Test

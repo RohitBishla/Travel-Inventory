@@ -7,10 +7,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 /**
- * {@code invoice_links} sits on each transaction's own shard and says "this transaction may be billed by that
- * invoice". It is written before the invoice commits and removed after the invoice lets go, so a missing link
- * always means "not billed". A link whose invoice does not bill the transaction is a leftover and is removed
- * when found.
+ * Links live on the transaction's shard and say "this invoice may bill me". No link means not billed. A link the
+ * invoice doesn't back up is a leftover from a failed write and gets removed when found.
  */
 @Repository
 public class InvoiceLinkRepository {

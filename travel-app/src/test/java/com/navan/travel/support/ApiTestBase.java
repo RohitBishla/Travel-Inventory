@@ -13,10 +13,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import com.navan.travel.common.shard.Shard;
 import com.navan.travel.common.shard.Shards;
 
-/**
- * Runs the app against two test shards on the MariaDB server named by TEST_DATABASE_HOST (default localhost),
- * recreated from the migrations when the test context starts.
- */
+/** Two fresh test shards on the MariaDB at TEST_DATABASE_HOST (default localhost). */
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
