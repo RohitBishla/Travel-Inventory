@@ -11,6 +11,6 @@ public record PageResponse<T>(List<T> items, int limit, String nextCursor) {
         return new PageResponse<>(
                 page.items().stream().map(toResponse).toList(),
                 page.limit(),
-                PageCursor.encode(page.nextBeforeId()));
+                PageCursor.encode(page.next()));
     }
 }

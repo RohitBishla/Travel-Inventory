@@ -3,6 +3,7 @@ package com.navan.travel.transaction;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -12,14 +13,16 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import com.navan.travel.common.ConflictException;
 import com.navan.travel.common.NotFoundException;
 import com.navan.travel.common.Page;
+import com.navan.travel.common.PagePosition;
 import com.navan.travel.common.PageQuery;
 import com.navan.travel.common.PublicIds;
 import com.navan.travel.common.TransientFailureRetry;
+import com.navan.travel.common.shard.Shard;
+import com.navan.travel.common.shard.Shards;
 import com.navan.travel.transaction.identity.DuplicateTransactionException;
 import com.navan.travel.transaction.identity.ExternalIdentity;
 import com.navan.travel.transaction.persistence.TransactionLoader;
@@ -35,7 +38,7 @@ public class TransactionService {
     private final TransactionLoader loader;
     private final ExternalIdentity identity;
     private final InvoiceUsage invoiceUsage;
-    private final TransactionTemplate transactionTemplate;
+    private final Shards shards;
     private final TransientFailureRetry retry;
 
     TransactionService(TransactionDraftFactory draftFactory,
@@ -43,33 +46,40 @@ public class TransactionService {
                        TransactionLoader loader,
                        ExternalIdentity identity,
                        InvoiceUsage invoiceUsage,
-                       TransactionTemplate transactionTemplate,
+                       Shards shards,
                        TransientFailureRetry retry) {
         this.draftFactory = draftFactory;
         this.writer = writer;
         this.loader = loader;
         this.identity = identity;
         this.invoiceUsage = invoiceUsage;
-        this.transactionTemplate = transactionTemplate;
+        this.shards = shards;
         this.retry = retry;
     }
 
     public Transaction create(NewTransaction input) {
-        identity.rejectIfTaken(input.externalId());
+        if (input.externalId() != null) {
+            rejectIfTaken(input.externalId());
+        }
         TransactionDraft draft = draftFactory.fromNew(input);
-        return retry.run(() -> insertOrRejectDuplicate(draft));
+        Shard owner = shards.forExternalId(draft.externalId());
+        return retry.run(() -> insertOrRejectDuplicate(owner, draft));
     }
 
     public Transaction get(long id) {
-        return loader.findById(id).orElseThrow(() -> notFound(id));
+        return shards.read(shardOf(id), () -> loader.findById(id)).orElseThrow(() -> notFound(id));
     }
 
     public Page<Transaction> list(PageQuery query) {
-        return loader.findPage(query);
+        List<List<Transaction>> rowsPerShard = shards.all().stream()
+                .map(shard -> shards.read(shard, () -> loader.findPageRows(query)))
+                .toList();
+        return Page.mergeOverfetched(rowsPerShard, query,
+                transaction -> new PagePosition(transaction.createdAt(), transaction.id()));
     }
 
     public Transaction update(long id, TransactionChanges changes) {
-        return retry.run(() -> transactionTemplate.execute(status -> {
+        return retry.run(() -> shards.inTransaction(shardOf(id), () -> {
             lockUnbilled(id);
             Transaction current = get(id);
             writer.replace(id, draftFactory.withChanges(current, changes));
@@ -77,13 +87,29 @@ public class TransactionService {
         }));
     }
 
+    /**
+     * Deletes the row first and its uniqueness record after, so a failure in between leaves a record pointing at
+     * nothing, which {@link #rejectIfTaken} recognises, never a row without its record.
+     */
     public void delete(long id) {
-        retry.runWithoutResult(() -> transactionTemplate.executeWithoutResult(status -> {
+        String externalId = retry.run(() -> shards.inTransaction(shardOf(id), () -> {
             lockUnbilled(id);
+            String deletedExternalId = get(id).externalId();
             writer.delete(id);
+            return deletedExternalId;
         }));
+        for (Shard shard : shards.identityShards(externalId)) {
+            try {
+                shards.inTransaction(shard, () -> identity.forget(externalId, id));
+            } catch (RuntimeException e) {
+                log.warn("Could not remove the external_id record of deleted transaction {} on {}", id, shard, e);
+            }
+        }
     }
 
+    /**
+     * Locks and loads transactions that all live on the shard of the surrounding {@link Shards#inTransaction}.
+     */
     public List<Transaction> lockForInvoicing(List<Long> ids) {
         List<Long> lockedIds = writer.lockByIds(ids.stream().sorted().toList());
         if (lockedIds.size() != ids.size()) {
@@ -94,15 +120,44 @@ public class TransactionService {
         return ids.stream().map(byId::get).toList();
     }
 
-    private Transaction insertOrRejectDuplicate(TransactionDraft draft) {
+    private Shard shardOf(long id) {
+        return shards.findForId(id).orElseThrow(() -> notFound(id));
+    }
+
+    private void rejectIfTaken(String externalId) {
+        for (Shard shard : shards.identityShards(externalId)) {
+            Optional<Long> recorded = shards.read(shard, () -> identity.findTransactionId(externalId));
+            if (recorded.isEmpty()) {
+                continue;
+            }
+            long existingId = recorded.get();
+            if (exists(existingId)) {
+                throw new DuplicateTransactionException(externalId, existingId);
+            }
+            log.info("Removing the external_id record of transaction {}, which no longer exists", existingId);
+            shards.inTransaction(shard, () -> identity.forget(externalId, existingId));
+        }
+    }
+
+    private boolean exists(long id) {
+        return shards.findForId(id)
+                .map(shard -> shards.read(shard, () -> loader.findById(id)).isPresent())
+                .orElse(false);
+    }
+
+    private Transaction insertOrRejectDuplicate(Shard owner, TransactionDraft draft) {
         try {
-            return transactionTemplate.execute(status -> get(writer.insert(draft)));
+            return shards.inTransaction(owner, () -> {
+                long id = writer.insert(draft);
+                identity.register(draft.externalId(), id);
+                return get(id);
+            });
         } catch (DuplicateKeyException e) {
             if (!identity.isExternalIdConflict(e)) {
                 throw e;
             }
             log.debug("Insert for external_id {} lost the race to a concurrent create", draft.externalId());
-            long existingId = identity.findTransactionId(draft.externalId())
+            long existingId = shards.read(owner, () -> identity.findTransactionId(draft.externalId()))
                     .orElseThrow(() -> new ConcurrencyFailureException(
                             "Conflicting insert for external_id is not visible yet", e));
             throw new DuplicateTransactionException(draft.externalId(), existingId);

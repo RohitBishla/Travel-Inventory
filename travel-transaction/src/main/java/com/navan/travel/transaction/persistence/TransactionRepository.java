@@ -44,7 +44,7 @@ class TransactionRepository {
                 .param("total", draft.total())
                 .param("now", SqlTime.toSql(clock.instant()))
                 .update(keyHolder, "id");
-        return keyHolder.getKeyAs(Long.class);
+        return keyHolder.getKeyAs(Number.class).longValue();
     }
 
     void updateHeader(long id, TransactionDraft draft) {
@@ -88,8 +88,10 @@ class TransactionRepository {
 
     List<TransactionHeader> findHeaderPage(PageQuery page) {
         return jdbc.sql("SELECT " + HEADER_COLUMNS + " FROM transactions "
-                        + "WHERE id < :idUpperBound ORDER BY id DESC LIMIT :limit")
-                .param("idUpperBound", page.idUpperBound())
+                        + "WHERE created_at < :createdAt OR (created_at = :createdAt AND id < :id) "
+                        + "ORDER BY created_at DESC, id DESC LIMIT :limit")
+                .param("createdAt", SqlTime.toSql(page.upperBound().createdAt()))
+                .param("id", page.upperBound().id())
                 .param("limit", page.fetchSize())
                 .query(this::mapHeader)
                 .list();

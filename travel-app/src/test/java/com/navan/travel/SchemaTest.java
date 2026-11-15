@@ -4,65 +4,76 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Connection;
-import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
-
-import javax.sql.DataSource;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 
+import com.navan.travel.common.shard.Shard;
 import com.navan.travel.support.ApiTestBase;
+
+import tools.jackson.databind.JsonNode;
 
 class SchemaTest extends ApiTestBase {
 
-    @Autowired
-    private DataSource dataSource;
-
     @Test
-    void externalIdHasAUniqueIndex() throws SQLException {
-        assertThat(indexedColumns("TRANSACTIONS", true)).containsEntry("EXTERNAL_ID", "UQ_TRANSACTIONS_EXTERNAL_ID");
+    void everyShardHasAUniqueIndexOnExternalId() throws SQLException {
+        for (Shard shard : shards.all()) {
+            assertThat(indexesByColumn(shard, "transactions", true).get("EXTERNAL_ID"))
+                    .as("%s", shard)
+                    .contains("UQ_TRANSACTIONS_EXTERNAL_ID");
+        }
     }
 
     @Test
     void databaseRejectsADuplicateExternalIdEvenWithoutTheApplication() {
+        Shard shard = shards.forExternalId("direct-1");
         String insert = """
                 INSERT INTO transactions (external_id, type, currency, occurred_at, total, version, created_at, updated_at)
                 VALUES ('direct-1', 'rail', 'EUR', CURRENT_TIMESTAMP, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """;
-        jdbc.sql(insert).update();
+        shard.jdbc().sql(insert).update();
 
-        assertThatThrownBy(() -> jdbc.sql(insert).update()).isInstanceOf(DuplicateKeyException.class);
+        assertThatThrownBy(() -> shard.jdbc().sql(insert).update()).isInstanceOf(DuplicateKeyException.class);
         assertThat(countTransactionsWithExternalId("direct-1")).isEqualTo(1);
     }
 
     @Test
-    void invoiceLinesAreIndexedByTransactionId() throws SQLException {
-        assertThat(indexedColumns("INVOICE_LINES", false)).containsEntry("TRANSACTION_ID", "IX_INVOICE_LINES_TRANSACTION_ID");
+    void everyShardIndexesInvoiceLinesByTransactionId() throws SQLException {
+        for (Shard shard : shards.all()) {
+            assertThat(indexesByColumn(shard, "invoice_lines", false).get("TRANSACTION_ID"))
+                    .as("%s", shard)
+                    .contains("IX_INVOICE_LINES_TRANSACTION_ID");
+        }
     }
 
     @Test
-    void healthEndpointReportsUp() {
-        assertThat(api.get("/health").body().get("status").stringValue()).isEqualTo("UP");
+    void healthReportsEveryShard() {
+        JsonNode health = api.get("/health").body();
+
+        assertThat(health.get("status").stringValue()).isEqualTo("UP");
+        assertThat(api.get("/health/readiness").body().get("status").stringValue()).isEqualTo("UP");
     }
 
-    private Map<String, String> indexedColumns(String table, boolean uniqueOnly) throws SQLException {
-        Map<String, String> indexByColumn = new HashMap<>();
-        try (Connection connection = dataSource.getConnection()) {
-            DatabaseMetaData metaData = connection.getMetaData();
-            try (ResultSet indexes = metaData.getIndexInfo(null, null, table, uniqueOnly, false)) {
-                while (indexes.next()) {
-                    String column = indexes.getString("COLUMN_NAME");
-                    if (column != null) {
-                        indexByColumn.put(column.toUpperCase(), indexes.getString("INDEX_NAME").toUpperCase());
-                    }
+    private static Map<String, Set<String>> indexesByColumn(Shard shard, String table, boolean uniqueOnly)
+            throws SQLException {
+        Map<String, Set<String>> indexesByColumn = new HashMap<>();
+        try (Connection connection = shard.dataSource().getConnection();
+             ResultSet indexes = connection.getMetaData()
+                     .getIndexInfo(connection.getCatalog(), null, table, uniqueOnly, false)) {
+            while (indexes.next()) {
+                String column = indexes.getString("COLUMN_NAME");
+                if (column != null) {
+                    indexesByColumn.computeIfAbsent(column.toUpperCase(), key -> new HashSet<>())
+                            .add(indexes.getString("INDEX_NAME").toUpperCase());
                 }
             }
         }
-        return indexByColumn;
+        return indexesByColumn;
     }
 }

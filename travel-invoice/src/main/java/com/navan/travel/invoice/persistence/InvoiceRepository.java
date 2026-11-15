@@ -16,10 +16,9 @@ import com.navan.travel.common.PageQuery;
 import com.navan.travel.common.SqlTime;
 import com.navan.travel.invoice.InvoiceSummary;
 import com.navan.travel.invoice.snapshot.InvoiceSnapshot;
-import com.navan.travel.transaction.InvoiceUsage;
 
 @Repository
-public class InvoiceRepository implements InvoiceUsage {
+public class InvoiceRepository {
 
     private static final String SUMMARY_COLUMNS =
             "id, currency, total, line_count, version, created_at, updated_at";
@@ -43,7 +42,7 @@ public class InvoiceRepository implements InvoiceUsage {
                 .param("lineCount", snapshot.lines().size())
                 .param("now", SqlTime.toSql(clock.instant()))
                 .update(keyHolder, "id");
-        return keyHolder.getKeyAs(Long.class);
+        return keyHolder.getKeyAs(Number.class).longValue();
     }
 
     public void update(long id, InvoiceSnapshot snapshot) {
@@ -82,20 +81,13 @@ public class InvoiceRepository implements InvoiceUsage {
 
     public List<InvoiceSummary> findSummaryPage(PageQuery page) {
         return jdbc.sql("SELECT " + SUMMARY_COLUMNS + " FROM invoices "
-                        + "WHERE id < :idUpperBound ORDER BY id DESC LIMIT :limit")
-                .param("idUpperBound", page.idUpperBound())
+                        + "WHERE created_at < :createdAt OR (created_at = :createdAt AND id < :id) "
+                        + "ORDER BY created_at DESC, id DESC LIMIT :limit")
+                .param("createdAt", SqlTime.toSql(page.upperBound().createdAt()))
+                .param("id", page.upperBound().id())
                 .param("limit", page.fetchSize())
                 .query(this::mapSummary)
                 .list();
-    }
-
-    @Override
-    public boolean isOnAnyInvoice(long transactionId) {
-        return jdbc.sql("SELECT 1 FROM invoice_lines WHERE transaction_id = :transactionId FETCH FIRST 1 ROWS ONLY")
-                .param("transactionId", transactionId)
-                .query(Integer.class)
-                .optional()
-                .isPresent();
     }
 
     private InvoiceSummary mapSummary(ResultSet rs, int rowNum) throws SQLException {

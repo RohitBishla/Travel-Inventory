@@ -10,24 +10,42 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.navan.travel.common.shard.Shard;
+import com.navan.travel.common.shard.Shards;
+
+/**
+ * Runs the app against two test shards on the MariaDB server named by TEST_DATABASE_HOST (default localhost),
+ * recreated from the migrations when the test context starts.
+ */
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "spring.datasource.url=jdbc:h2:file:./target/test-db/${random.uuid};LOCK_TIMEOUT=1000")
+        properties = {
+                "travel.sharding.shards[0].id=0",
+                "travel.sharding.shards[0].url=jdbc:mariadb://${TEST_DATABASE_HOST:localhost}:3306/travel_test_shard_0?createDatabaseIfNotExist=true",
+                "travel.sharding.shards[1].id=1",
+                "travel.sharding.shards[1].url=jdbc:mariadb://${TEST_DATABASE_HOST:localhost}:3306/travel_test_shard_1?createDatabaseIfNotExist=true",
+                "travel.sharding.fresh-schema=true",
+                "travel.sharding.lock-wait-timeout-seconds=1"
+        })
 public abstract class ApiTestBase {
 
     @Value("${local.server.port}")
     private int port;
 
     @Autowired
-    protected JdbcClient jdbc;
+    protected Shards shards;
 
     protected Api api;
 
     @BeforeEach
     void resetDatabase() {
         api = new Api(port);
-        jdbc.sql("DELETE FROM invoices").update();
-        jdbc.sql("DELETE FROM transactions").update();
+        for (Shard shard : shards.all()) {
+            shard.jdbc().sql("DELETE FROM invoice_links").update();
+            shard.jdbc().sql("DELETE FROM invoices").update();
+            shard.jdbc().sql("DELETE FROM transactions").update();
+            shard.jdbc().sql("DELETE FROM external_ids").update();
+        }
     }
 
     protected Map<String, String> createTripTransactions() {
@@ -47,14 +65,29 @@ public abstract class ApiTestBase {
     }
 
     protected long countRows(String table) {
-        return jdbc.sql("SELECT COUNT(*) FROM " + table).query(Long.class).single();
+        return shards.all().stream().mapToLong(shard -> countRows(shard, table)).sum();
+    }
+
+    protected static long countRows(Shard shard, String table) {
+        return shard.jdbc().sql("SELECT COUNT(*) FROM " + table).query(Long.class).single();
     }
 
     protected long countTransactionsWithExternalId(String externalId) {
-        return jdbc.sql("SELECT COUNT(*) FROM transactions WHERE external_id = :externalId")
-                .param("externalId", externalId)
-                .query(Long.class)
-                .single();
+        return shards.all().stream()
+                .mapToLong(shard -> shard.jdbc()
+                        .sql("SELECT COUNT(*) FROM transactions WHERE external_id = :externalId")
+                        .param("externalId", externalId)
+                        .query(Long.class)
+                        .single())
+                .sum();
+    }
+
+    protected Shard shardOf(String publicId) {
+        return shards.forId(numericId(publicId));
+    }
+
+    protected JdbcClient jdbcOnShardOf(String publicId) {
+        return shardOf(publicId).jdbc();
     }
 
     protected static long numericId(String publicId) {

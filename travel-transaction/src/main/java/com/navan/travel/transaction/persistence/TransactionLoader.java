@@ -9,7 +9,6 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 import com.navan.travel.common.Money;
-import com.navan.travel.common.Page;
 import com.navan.travel.common.PageQuery;
 import com.navan.travel.transaction.FeeLine;
 import com.navan.travel.transaction.TaxLine;
@@ -42,9 +41,8 @@ public class TransactionLoader {
         return hydrate(transactions.findHeaders(ids));
     }
 
-    public Page<Transaction> findPage(PageQuery query) {
-        List<Transaction> rows = hydrate(transactions.findHeaderPage(query));
-        return Page.fromOverfetched(rows, query, Transaction::id);
+    public List<Transaction> findPageRows(PageQuery query) {
+        return hydrate(transactions.findHeaderPage(query));
     }
 
     private List<Transaction> hydrate(List<TransactionHeader> headers) {

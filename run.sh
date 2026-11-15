@@ -11,15 +11,18 @@ usage() {
 Usage: ./run.sh [command] [app args...]
 
 Commands:
-  start   build without tests and start the API on :8080 (default)
-  build   build all modules and run the tests
-  test    run the tests
-  reset   delete the local database in ./data
-  help    show this message
+  start     build without tests and start the API on :8080 (default)
+  build     build all modules and run the tests
+  test      run the tests
+  reset     drop both shard databases (travel_shard_0, travel_shard_1); the next start recreates them
+  rebalance after adding a shard: move external_id records to their new owners, then exit
+  help      show this message
 
 Extra arguments after "start" go to the app, for example:
   ./run.sh start --server.port=9090
-  ./run.sh start --spring.profiles.active=postgres
+
+Needs MariaDB on localhost:3306 with user travel/travel allowed to create travel_* databases
+(see README). SHARD_0_URL, SHARD_1_URL, DATABASE_USERNAME and DATABASE_PASSWORD override the defaults.
 EOF
 }
 
@@ -59,7 +62,7 @@ case "$command" in
     start)
         find_java
         ./mvnw -q -B package -DskipTests
-        echo "Starting API (default http://localhost:8080, data in ./data)"
+        echo "Starting API (default http://localhost:8080, shards travel_shard_0 and travel_shard_1)"
         exec java -jar "$APP_JAR" "$@"
         ;;
     build)
@@ -70,9 +73,15 @@ case "$command" in
         find_java
         ./mvnw -B test
         ;;
+    rebalance)
+        find_java
+        ./mvnw -q -B package -DskipTests
+        exec java -jar "$APP_JAR" --rebalance --spring.main.web-application-type=none "$@"
+        ;;
     reset)
-        rm -rf data
-        echo "Deleted ./data"
+        mariadb -h 127.0.0.1 -u "${DATABASE_USERNAME:-travel}" -p"${DATABASE_PASSWORD:-travel}" \
+            -e "DROP DATABASE IF EXISTS travel_shard_0; DROP DATABASE IF EXISTS travel_shard_1"
+        echo "Dropped travel_shard_0 and travel_shard_1"
         ;;
     help | -h | --help)
         usage

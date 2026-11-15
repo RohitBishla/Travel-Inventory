@@ -1,20 +1,23 @@
 package com.navan.travel.common;
 
-public record PageQuery(int limit, Long beforeId) {
+/**
+ * @param after the last row of the previous page; this page holds the rows older than it
+ */
+public record PageQuery(int limit, PagePosition after) {
 
     public static final int DEFAULT_LIMIT = 50;
     public static final int MAX_LIMIT = 100;
 
-    public static PageQuery of(Integer requestedLimit, Long beforeId) {
+    public static PageQuery of(Integer requestedLimit, PagePosition after) {
         int limit = requestedLimit == null ? DEFAULT_LIMIT : requestedLimit;
         if (limit < 1) {
             throw new ValidationException("limit must be at least 1");
         }
-        return new PageQuery(Math.min(limit, MAX_LIMIT), beforeId);
+        return new PageQuery(Math.min(limit, MAX_LIMIT), after);
     }
 
-    public long idUpperBound() {
-        return beforeId == null ? Long.MAX_VALUE : beforeId;
+    public PagePosition upperBound() {
+        return after == null ? PagePosition.BEFORE_EVERYTHING : after;
     }
 
     public int fetchSize() {

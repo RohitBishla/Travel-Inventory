@@ -12,6 +12,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -100,7 +101,8 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.of(e.code(), e.getMessage()));
     }
 
-    @ExceptionHandler({TransientDataAccessException.class, DataAccessResourceFailureException.class})
+    @ExceptionHandler({TransientDataAccessException.class, DataAccessResourceFailureException.class,
+            CannotCreateTransactionException.class})
     ResponseEntity<ApiError> handleDatabaseUnavailable(RuntimeException e) {
         log.warn("Database unavailable or contended, asking client to retry", e);
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
