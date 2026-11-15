@@ -1,92 +1,195 @@
 package com.navan.travel.invoice;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import com.navan.travel.common.ConflictException;
 import com.navan.travel.common.NotFoundException;
 import com.navan.travel.common.Page;
+import com.navan.travel.common.PagePosition;
 import com.navan.travel.common.PageQuery;
 import com.navan.travel.common.PublicIds;
 import com.navan.travel.common.TransientFailureRetry;
 import com.navan.travel.common.ValidationException;
+import com.navan.travel.common.shard.Shard;
+import com.navan.travel.common.shard.Shards;
+import com.navan.travel.invoice.persistence.InvoiceLinkRepository;
 import com.navan.travel.invoice.persistence.InvoiceRepository;
 import com.navan.travel.invoice.persistence.InvoiceSnapshotRepository;
 import com.navan.travel.invoice.snapshot.InvoiceSnapshot;
 import com.navan.travel.invoice.snapshot.InvoiceSnapshotBuilder;
+import com.navan.travel.transaction.Transaction;
 import com.navan.travel.transaction.TransactionService;
 
+/**
+ * An invoice lives on its home shard, the lowest shard holding one of its transactions, and takes its id from
+ * there, so the id names the home. A write opens a database transaction on every shard involved in ascending
+ * order and the innermost commits first. That order keeps "billed" reliable without a distributed commit:
+ * links reach each transaction's shard before the invoice commits, and are removed only after it lets go.
+ */
 @Service
 public class InvoiceService {
 
+    private static final Logger log = LoggerFactory.getLogger(InvoiceService.class);
     private static final int MAX_TRANSACTIONS_PER_INVOICE = 100;
 
     private final InvoiceRepository invoices;
     private final InvoiceSnapshotRepository snapshots;
+    private final InvoiceLinkRepository links;
     private final InvoiceSnapshotBuilder snapshotBuilder;
     private final TransactionService transactionService;
-    private final TransactionTemplate transactionTemplate;
+    private final Shards shards;
     private final TransientFailureRetry retry;
 
     InvoiceService(InvoiceRepository invoices,
-                          InvoiceSnapshotRepository snapshots,
-                          InvoiceSnapshotBuilder snapshotBuilder,
-                          TransactionService transactionService,
-                          TransactionTemplate transactionTemplate,
-                          TransientFailureRetry retry) {
+                   InvoiceSnapshotRepository snapshots,
+                   InvoiceLinkRepository links,
+                   InvoiceSnapshotBuilder snapshotBuilder,
+                   TransactionService transactionService,
+                   Shards shards,
+                   TransientFailureRetry retry) {
         this.invoices = invoices;
         this.snapshots = snapshots;
+        this.links = links;
         this.snapshotBuilder = snapshotBuilder;
         this.transactionService = transactionService;
-        this.transactionTemplate = transactionTemplate;
+        this.shards = shards;
         this.retry = retry;
     }
 
     public Invoice create(List<Long> transactionIds) {
         validateTransactionIds(transactionIds);
-        return retry.run(() -> transactionTemplate.execute(status -> {
-            InvoiceSnapshot snapshot = snapshotOf(transactionIds);
-            long invoiceId = invoices.insert(snapshot);
-            snapshots.insert(invoiceId, snapshot);
-            return load(invoiceId);
+        SortedMap<Shard, List<Long>> idsByShard = groupByShard(transactionIds);
+        Shard home = idsByShard.firstKey();
+        long invoiceId = retry.run(() -> withLockedTransactions(idsByShard, locked -> {
+            InvoiceSnapshot snapshot = snapshotBuilder.build(inRequestOrder(transactionIds, locked));
+            long newId = shards.inTransaction(home, () -> {
+                long id = invoices.insert(snapshot);
+                snapshots.insert(id, snapshot);
+                return id;
+            });
+            link(newId, idsByShard);
+            return newId;
         }));
+        return get(invoiceId);
     }
 
     public Invoice get(long id) {
-        return load(id);
+        return shards.read(homeOf(id), () -> load(id));
     }
 
     public Page<InvoiceSummary> list(PageQuery query) {
-        return Page.fromOverfetched(invoices.findSummaryPage(query), query, InvoiceSummary::id);
+        List<List<InvoiceSummary>> rowsPerShard = shards.all().stream()
+                .map(shard -> shards.read(shard, () -> invoices.findSummaryPage(query)))
+                .toList();
+        return Page.mergeOverfetched(rowsPerShard, query,
+                summary -> new PagePosition(summary.createdAt(), summary.id()));
     }
 
     public Invoice replaceTransactions(long id, List<Long> transactionIds) {
         validateTransactionIds(transactionIds);
-        return retry.run(() -> transactionTemplate.execute(status -> {
+        Shard home = homeOf(id);
+        SortedMap<Shard, List<Long>> idsByShard = groupByShard(transactionIds);
+        Set<Long> kept = Set.copyOf(transactionIds);
+        List<Long> released = retry.run(() -> shards.inTransaction(home, () -> {
             if (!invoices.lockById(id)) {
                 throw notFound(id);
             }
-            InvoiceSnapshot snapshot = snapshotOf(transactionIds);
-            snapshots.delete(id);
-            snapshots.insert(id, snapshot);
-            invoices.update(id, snapshot);
-            return load(id);
+            List<Long> previous = snapshots.transactionIds(id);
+            return withLockedTransactions(idsByShard, locked -> {
+                InvoiceSnapshot snapshot = snapshotBuilder.build(inRequestOrder(transactionIds, locked));
+                shards.inTransaction(home, () -> {
+                    snapshots.delete(id);
+                    snapshots.insert(id, snapshot);
+                    invoices.update(id, snapshot);
+                });
+                link(id, idsByShard);
+                return previous.stream().filter(previousId -> !kept.contains(previousId)).toList();
+            });
         }));
+        unlink(id, released);
+        return get(id);
     }
 
     public void delete(long id) {
-        retry.runWithoutResult(() -> transactionTemplate.executeWithoutResult(status -> {
-            if (!invoices.delete(id)) {
+        List<Long> released = retry.run(() -> shards.inTransaction(homeOf(id), () -> {
+            if (!invoices.lockById(id)) {
                 throw notFound(id);
             }
+            List<Long> billed = snapshots.transactionIds(id);
+            invoices.delete(id);
+            return billed;
         }));
+        unlink(id, released);
     }
 
-    private InvoiceSnapshot snapshotOf(List<Long> transactionIds) {
-        return snapshotBuilder.build(transactionService.lockForInvoicing(transactionIds));
+    private <T> T withLockedTransactions(SortedMap<Shard, List<Long>> idsByShard,
+                                         Function<List<Transaction>, T> action) {
+        return lockShardByShard(List.copyOf(idsByShard.entrySet()), new ArrayList<>(), action);
+    }
+
+    private <T> T lockShardByShard(List<Map.Entry<Shard, List<Long>>> remaining,
+                                   List<Transaction> locked,
+                                   Function<List<Transaction>, T> action) {
+        if (remaining.isEmpty()) {
+            return action.apply(locked);
+        }
+        Map.Entry<Shard, List<Long>> next = remaining.getFirst();
+        return shards.inTransaction(next.getKey(), () -> {
+            locked.addAll(transactionService.lockForInvoicing(next.getValue()));
+            return lockShardByShard(remaining.subList(1, remaining.size()), locked, action);
+        });
+    }
+
+    private void link(long invoiceId, SortedMap<Shard, List<Long>> idsByShard) {
+        idsByShard.forEach((shard, ids) -> shards.inTransaction(shard, () -> links.add(invoiceId, ids)));
+    }
+
+    private void unlink(long invoiceId, List<Long> transactionIds) {
+        groupByShard(transactionIds).forEach((shard, ids) -> {
+            try {
+                shards.inTransaction(shard, () -> links.remove(invoiceId, ids));
+            } catch (RuntimeException e) {
+                log.warn("Could not unlink invoice {} on {}; the leftover links are removed when next checked",
+                        invoiceId, shard, e);
+            }
+        });
+    }
+
+    private Shard homeOf(long invoiceId) {
+        return shards.findForId(invoiceId).orElseThrow(() -> notFound(invoiceId));
+    }
+
+    private SortedMap<Shard, List<Long>> groupByShard(List<Long> transactionIds) {
+        String unknown = transactionIds.stream()
+                .filter(id -> shards.findForId(id).isEmpty())
+                .map(PublicIds::transaction)
+                .collect(Collectors.joining(", "));
+        if (!unknown.isEmpty()) {
+            throw new NotFoundException("Transactions not found: " + unknown);
+        }
+        return transactionIds.stream().collect(Collectors.groupingBy(
+                shards::forId,
+                () -> new TreeMap<>(Comparator.comparingInt(Shard::id)),
+                Collectors.toList()));
+    }
+
+    private static List<Transaction> inRequestOrder(List<Long> transactionIds, List<Transaction> locked) {
+        Map<Long, Transaction> byId = locked.stream()
+                .collect(Collectors.toMap(Transaction::id, Function.identity()));
+        return transactionIds.stream().map(byId::get).toList();
     }
 
     private Invoice load(long id) {

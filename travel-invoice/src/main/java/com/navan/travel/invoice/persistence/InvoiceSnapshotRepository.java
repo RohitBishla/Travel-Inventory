@@ -46,6 +46,29 @@ public class InvoiceSnapshotRepository {
         jdbc.sql("DELETE FROM invoice_fee_rollups WHERE invoice_id = :id").param("id", invoiceId).update();
     }
 
+    public List<Long> transactionIds(long invoiceId) {
+        return jdbc.sql("SELECT transaction_id FROM invoice_lines WHERE invoice_id = :id ORDER BY line_no")
+                .param("id", invoiceId)
+                .query(Long.class)
+                .list();
+    }
+
+    /**
+     * A locking read, so a line written by an invoice that has not committed yet is waited for, not missed.
+     */
+    public boolean billsTransaction(long invoiceId, long transactionId) {
+        return jdbc.sql("""
+                        SELECT 1 FROM invoice_lines
+                        WHERE invoice_id = :invoiceId AND transaction_id = :transactionId
+                        LOCK IN SHARE MODE
+                        """)
+                .param("invoiceId", invoiceId)
+                .param("transactionId", transactionId)
+                .query(Integer.class)
+                .optional()
+                .isPresent();
+    }
+
     public InvoiceSnapshot find(long invoiceId, String currency, BigDecimal total) {
         List<StoredLine> storedLines = findLines(invoiceId);
         List<Long> lineIds = storedLines.stream().map(StoredLine::id).toList();
@@ -82,7 +105,7 @@ public class InvoiceSnapshotRepository {
                 .param("transactionVersion", line.transactionVersion())
                 .param("metadata", line.metadataJson())
                 .update(keyHolder, "id");
-        return keyHolder.getKeyAs(Long.class);
+        return keyHolder.getKeyAs(Number.class).longValue();
     }
 
     private void insertTaxLines(String table, String ownerColumn, long ownerId, List<TaxLine> taxLines) {

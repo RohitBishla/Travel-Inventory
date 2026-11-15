@@ -8,10 +8,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 
-import javax.sql.DataSource;
-
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 
 import com.navan.travel.support.ApiResponse;
 import com.navan.travel.support.ApiTestBase;
@@ -19,14 +16,11 @@ import com.navan.travel.support.Fixtures;
 
 class DatabaseContentionTest extends ApiTestBase {
 
-    @Autowired
-    private DataSource dataSource;
-
     @Test
     void patchOnARowHeldByAnotherWriterFailsFastWithServiceUnavailable() throws Exception {
         String flightId = api.createTransaction(Fixtures.seed("flight"));
 
-        try (Connection lockHolder = dataSource.getConnection()) {
+        try (Connection lockHolder = shardOf(flightId).dataSource().getConnection()) {
             lockHolder.setAutoCommit(false);
             try (PreparedStatement lock = lockHolder.prepareStatement(
                     "SELECT id FROM transactions WHERE id = ? FOR UPDATE")) {

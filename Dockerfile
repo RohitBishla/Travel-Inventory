@@ -17,8 +17,7 @@ RUN --mount=type=cache,target=/root/.m2 \
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 
-RUN groupadd --system app && useradd --system --gid app app \
-    && mkdir -p /app/data && chown app:app /app/data
+RUN groupadd --system app && useradd --system --gid app app
 USER app
 
 COPY --from=build /workspace/app.jar app.jar

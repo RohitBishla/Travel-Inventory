@@ -1,35 +1,44 @@
 package com.navan.travel.api;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 
+import com.navan.travel.common.PagePosition;
 import com.navan.travel.common.ValidationException;
 
+/**
+ * An opaque cursor: the creation time (epoch microseconds) and id of the last row on the previous page.
+ */
 final class PageCursor {
 
-    private static final String PREFIX = "before:";
+    private static final String PREFIX = "after:";
 
     private PageCursor() {
     }
 
-    static String encode(Long beforeId) {
-        if (beforeId == null) {
+    static String encode(PagePosition position) {
+        if (position == null) {
             return null;
         }
-        byte[] raw = (PREFIX + beforeId).getBytes(StandardCharsets.UTF_8);
+        long epochMicros = ChronoUnit.MICROS.between(Instant.EPOCH, position.createdAt());
+        byte[] raw = (PREFIX + epochMicros + ":" + position.id()).getBytes(StandardCharsets.UTF_8);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
     }
 
-    static Long decode(String cursor) {
+    static PagePosition decode(String cursor) {
         if (cursor == null || cursor.isBlank()) {
             return null;
         }
         try {
             String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
             if (raw.startsWith(PREFIX)) {
-                return Long.parseLong(raw.substring(PREFIX.length()));
+                String[] parts = raw.substring(PREFIX.length()).split(":", 2);
+                Instant createdAt = Instant.EPOCH.plus(Long.parseLong(parts[0]), ChronoUnit.MICROS);
+                return new PagePosition(createdAt, Long.parseLong(parts[1]));
             }
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
             throw invalid();
         }
         throw invalid();

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.navan.travel.support.ApiResponse;
 import com.navan.travel.support.ApiTestBase;
@@ -20,14 +21,15 @@ class InvoiceSnapshotTest extends ApiTestBase {
         Map<String, String> ids = createTripTransactions();
         String invoiceId = createTripInvoice(ids);
         long flightId = numericId(ids.get("flight"));
+        JdbcClient flightShard = jdbcOnShardOf(ids.get("flight"));
 
-        jdbc.sql("UPDATE transactions SET total = 999.99, version = version + 1 WHERE id = :id")
+        flightShard.sql("UPDATE transactions SET total = 999.99, version = version + 1 WHERE id = :id")
                 .param("id", flightId)
                 .update();
-        jdbc.sql("UPDATE transaction_tax_lines SET amount = 500 WHERE transaction_id = :id")
+        flightShard.sql("UPDATE transaction_tax_lines SET amount = 500 WHERE transaction_id = :id")
                 .param("id", flightId)
                 .update();
-        jdbc.sql("UPDATE flight_coupons SET flight_number = 'XX000' WHERE transaction_id = :id")
+        flightShard.sql("UPDATE flight_coupons SET flight_number = 'XX000' WHERE transaction_id = :id")
                 .param("id", flightId)
                 .update();
 
