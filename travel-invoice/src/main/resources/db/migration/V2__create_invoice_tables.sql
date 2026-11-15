@@ -1,6 +1,5 @@
--- An invoice and its snapshot live on the invoice's home shard. invoice_lines.transaction_id has no foreign key
--- because the transaction may live on another shard; invoice_links, on the transaction's own shard, carries the
--- ON DELETE RESTRICT guard instead.
+-- invoice_lines has no foreign key to transactions: the transaction may be on another shard.
+-- invoice_links, on the transaction's own shard, does the ON DELETE RESTRICT job instead.
 
 CREATE TABLE invoices (
     id         BIGINT         NOT NULL AUTO_INCREMENT PRIMARY KEY,

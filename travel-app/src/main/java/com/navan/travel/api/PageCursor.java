@@ -8,9 +8,7 @@ import java.util.Base64;
 import com.navan.travel.common.PagePosition;
 import com.navan.travel.common.ValidationException;
 
-/**
- * An opaque cursor: the creation time (epoch microseconds) and id of the last row on the previous page.
- */
+/** Opaque to clients: created_at (epoch micros) and id of the last row they saw. */
 final class PageCursor {
 
     private static final String PREFIX = "after:";

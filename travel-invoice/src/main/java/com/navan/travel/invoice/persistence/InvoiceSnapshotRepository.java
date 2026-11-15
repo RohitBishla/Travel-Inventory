@@ -23,6 +23,15 @@ import com.navan.travel.transaction.metadata.FeeKind;
 @Repository
 public class InvoiceSnapshotRepository {
 
+    private static final String INSERT_LINE_TAX = "INSERT INTO invoice_line_tax_lines "
+            + "(invoice_line_id, line_no, name, rate, amount) VALUES (:ownerId, :lineNo, :name, :rate, :amount)";
+    private static final String INSERT_LINE_FEE = "INSERT INTO invoice_line_fee_lines "
+            + "(invoice_line_id, line_no, name, amount) VALUES (:ownerId, :lineNo, :name, :amount)";
+    private static final String INSERT_TAX_ROLLUP = "INSERT INTO invoice_tax_rollups "
+            + "(invoice_id, line_no, name, rate, amount) VALUES (:ownerId, :lineNo, :name, :rate, :amount)";
+    private static final String INSERT_FEE_ROLLUP = "INSERT INTO invoice_fee_rollups "
+            + "(invoice_id, line_no, name, amount) VALUES (:ownerId, :lineNo, :name, :amount)";
+
     private final JdbcClient jdbc;
 
     public InvoiceSnapshotRepository(JdbcClient jdbc) {
@@ -33,11 +42,11 @@ public class InvoiceSnapshotRepository {
         for (int lineNo = 0; lineNo < snapshot.lines().size(); lineNo++) {
             InvoiceLine line = snapshot.lines().get(lineNo);
             long invoiceLineId = insertLine(invoiceId, lineNo, line);
-            insertTaxLines("invoice_line_tax_lines", "invoice_line_id", invoiceLineId, line.taxLines());
-            insertFeeLines("invoice_line_fee_lines", "invoice_line_id", invoiceLineId, line.feeLines());
+            insertTaxLines(INSERT_LINE_TAX, invoiceLineId, line.taxLines());
+            insertFeeLines(INSERT_LINE_FEE, invoiceLineId, line.feeLines());
         }
-        insertTaxLines("invoice_tax_rollups", "invoice_id", invoiceId, snapshot.taxRollup());
-        insertFeeLines("invoice_fee_rollups", "invoice_id", invoiceId, snapshot.feeRollup());
+        insertTaxLines(INSERT_TAX_ROLLUP, invoiceId, snapshot.taxRollup());
+        insertFeeLines(INSERT_FEE_ROLLUP, invoiceId, snapshot.feeRollup());
     }
 
     public void delete(long invoiceId) {
@@ -53,9 +62,7 @@ public class InvoiceSnapshotRepository {
                 .list();
     }
 
-    /**
-     * A locking read, so a line written by an invoice that has not committed yet is waited for, not missed.
-     */
+    /** Locking read: waits for an invoice that is still committing instead of missing it. */
     public boolean billsTransaction(long invoiceId, long transactionId) {
         return jdbc.sql("""
                         SELECT 1 FROM invoice_lines
@@ -108,11 +115,10 @@ public class InvoiceSnapshotRepository {
         return keyHolder.getKeyAs(Number.class).longValue();
     }
 
-    private void insertTaxLines(String table, String ownerColumn, long ownerId, List<TaxLine> taxLines) {
+    private void insertTaxLines(String insertSql, long ownerId, List<TaxLine> taxLines) {
         for (int lineNo = 0; lineNo < taxLines.size(); lineNo++) {
             TaxLine line = taxLines.get(lineNo);
-            jdbc.sql("INSERT INTO " + table + " (" + ownerColumn + ", line_no, name, rate, amount) "
-                            + "VALUES (:ownerId, :lineNo, :name, :rate, :amount)")
+            jdbc.sql(insertSql)
                     .param("ownerId", ownerId)
                     .param("lineNo", lineNo)
                     .param("name", line.name())
@@ -122,11 +128,10 @@ public class InvoiceSnapshotRepository {
         }
     }
 
-    private void insertFeeLines(String table, String ownerColumn, long ownerId, List<FeeLine> feeLines) {
+    private void insertFeeLines(String insertSql, long ownerId, List<FeeLine> feeLines) {
         for (int lineNo = 0; lineNo < feeLines.size(); lineNo++) {
             FeeLine line = feeLines.get(lineNo);
-            jdbc.sql("INSERT INTO " + table + " (" + ownerColumn + ", line_no, name, amount) "
-                            + "VALUES (:ownerId, :lineNo, :name, :amount)")
+            jdbc.sql(insertSql)
                     .param("ownerId", ownerId)
                     .param("lineNo", lineNo)
                     .param("name", line.name())

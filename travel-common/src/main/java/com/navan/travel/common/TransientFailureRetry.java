@@ -25,13 +25,6 @@ public class TransientFailureRetry {
         }
     }
 
-    public void runWithoutResult(Runnable unitOfWork) {
-        run(() -> {
-            unitOfWork.run();
-            return null;
-        });
-    }
-
     private void pause(int attempt) {
         long ceiling = BASE_BACKOFF_MILLIS << attempt;
         try {

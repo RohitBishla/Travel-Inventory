@@ -51,11 +51,6 @@ class ShardingConfig {
     }
 
     @Bean
-    ShardPools shardPools(Shards shards) {
-        return new ShardPools(shards);
-    }
-
-    @Bean
     HealthIndicator shardsHealthIndicator(Shards shards) {
         return () -> {
             Health.Builder health = Health.up();
@@ -71,9 +66,7 @@ class ShardingConfig {
         };
     }
 
-    /**
-     * Shard {@code n} hands out ids n + 1, n + 1 + 64, ... so an id names its shard no matter how many are added.
-     */
+    /** Shard n issues ids n+1, n+65, n+129, ... so an id always names its shard. */
     private static HikariDataSource dataSource(ShardingProperties properties, ShardingProperties.ShardConfig shard) {
         HikariDataSource dataSource = new HikariDataSource();
         dataSource.setPoolName("shard-" + shard.id());

@@ -1,4 +1,4 @@
--- The app creates and migrates travel_shard_0 and travel_shard_1 itself; it only needs a user allowed to.
+-- The app creates its own shard databases; it just needs a user that may.
 CREATE USER IF NOT EXISTS 'travel'@'%' IDENTIFIED BY 'travel';
 CREATE USER IF NOT EXISTS 'travel'@'localhost' IDENTIFIED BY 'travel';
 GRANT ALL PRIVILEGES ON `travel\_%`.* TO 'travel'@'%';

@@ -10,9 +10,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
 /**
- * {@code external_ids} on the key's ring owner is where an {@code external_id} is unique. A new transaction is
- * written on that same shard, so the row and its record commit together. After shards are added the record can sit
- * on a different shard from the row; rows never move, only these small records do.
+ * external_ids, on the key's owner shard, is what keeps external_id unique. It is written with the row; when a
+ * shard is added only these records move, never the rows.
  */
 @Component
 public class ExternalIdentity {

@@ -18,21 +18,10 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import com.navan.travel.common.NotFoundException;
 
 /**
- * Routing and shard-scoped execution.
- *
- * <ul>
- *   <li>Keys: an {@code external_id} is owned by one shard on a consistent-hash {@link HashRing}. New transactions
- *       are written there, and that shard holds the key's uniqueness record.</li>
- *   <li>Ids: shard {@code n} issues ids {@code n + 1, n + 1 + 64, ...} ({@code auto_increment_increment} =
- *       {@value #MAX_SHARDS}), so an id names the shard that holds its row, however many shards are added later.</li>
- *   <li>While shards are being added, {@code previousRing} keeps the old ring so a key whose owner changed is also
- *       looked up where it used to live.</li>
- * </ul>
- *
- * Repository code runs inside {@link #read} or {@link #inTransaction}, which select the shard that
- * {@link #currentJdbc()} talks to.
+ * Finds the shard for a key or an id, and runs repository code against it.
+ * Keys are placed on a {@link HashRing}. Ids come in 64 lanes, one per shard, so (id - 1) % 64 is the shard.
  */
-public class Shards {
+public class Shards implements AutoCloseable {
 
     public static final int MAX_SHARDS = 64;
 
@@ -68,10 +57,7 @@ public class Shards {
         return byId.get(ring.ownerOf(externalId));
     }
 
-    /**
-     * Every shard that may hold the uniqueness record of {@code externalId}: its owner and, while shards are being
-     * added, its owner on the previous ring.
-     */
+    /** Where the key's uniqueness record can be: its owner, plus its old owner while a new shard is joining. */
     public List<Shard> identityShards(String externalId) {
         Set<Shard> candidates = new LinkedHashSet<>();
         candidates.add(forExternalId(externalId));
@@ -90,11 +76,15 @@ public class Shards {
     }
 
     public <T> T read(Shard shard, Supplier<T> work) {
-        scope.get().push(shard);
+        Deque<Shard> stack = scope.get();
+        stack.push(shard);
         try {
             return work.get();
         } finally {
-            scope.get().pop();
+            stack.pop();
+            if (stack.isEmpty()) {
+                scope.remove();
+            }
         }
     }
 
@@ -105,10 +95,7 @@ public class Shards {
         });
     }
 
-    /**
-     * Runs {@code work} in a database transaction on {@code shard}, joining one that is already open there.
-     * Transactions on different shards can be open at once; the innermost commits first.
-     */
+    /** Runs work in a transaction on this shard, joining one already open there. The innermost commits first. */
     public <T> T inTransaction(Shard shard, Supplier<T> work) {
         return read(shard, () -> shard.transactions().execute(status -> work.get()));
     }
@@ -118,6 +105,15 @@ public class Shards {
             work.run();
             return null;
         });
+    }
+
+    @Override
+    public void close() throws Exception {
+        for (Shard shard : shards) {
+            if (shard.dataSource() instanceof AutoCloseable pool) {
+                pool.close();
+            }
+        }
     }
 
     JdbcClient currentJdbc() {

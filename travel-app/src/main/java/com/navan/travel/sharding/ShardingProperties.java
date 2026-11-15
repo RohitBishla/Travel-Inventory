@@ -5,9 +5,9 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * @param shards       every shard, each with an id (0-63) that never changes once it holds data
- * @param previousRing while shards are being added: the shard ids that formed the ring before; empty otherwise
- * @param freshSchema  drop and recreate every shard's schema on start (tests only)
+ * @param shards       shard ids (0-63) never change once a shard holds data
+ * @param previousRing the old shard ids, only while a new shard is joining
+ * @param freshSchema  wipe and recreate the schema on start; tests only
  */
 @ConfigurationProperties("travel.sharding")
 public record ShardingProperties(
