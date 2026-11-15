@@ -8,8 +8,6 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 import com.navan.travel.common.ConflictException;
-import com.navan.travel.transaction.FeeLine;
-import com.navan.travel.transaction.TaxLine;
 import com.navan.travel.transaction.Transaction;
 
 import tools.jackson.databind.ObjectMapper;
@@ -26,15 +24,7 @@ public class InvoiceSnapshotBuilder {
     public InvoiceSnapshot build(List<Transaction> transactions) {
         String currency = sharedCurrency(transactions);
         List<InvoiceLine> lines = transactions.stream().map(this::toLine).toList();
-        List<TaxLine> allTaxLines = lines.stream().flatMap(line -> line.taxLines().stream()).toList();
-        List<FeeLine> allFeeLines = lines.stream().flatMap(line -> line.feeLines().stream()).toList();
-
-        return new InvoiceSnapshot(
-                currency,
-                RollupCalculator.grandTotal(lines),
-                lines,
-                RollupCalculator.rollUpTaxes(allTaxLines),
-                RollupCalculator.rollUpFees(allFeeLines));
+        return new InvoiceSnapshot(currency, RollupCalculator.grandTotal(lines), lines);
     }
 
     private InvoiceLine toLine(Transaction transaction) {

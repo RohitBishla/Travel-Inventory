@@ -88,13 +88,6 @@ public class Shards implements AutoCloseable {
         }
     }
 
-    public void read(Shard shard, Runnable work) {
-        read(shard, () -> {
-            work.run();
-            return null;
-        });
-    }
-
     /** Runs work in a transaction on this shard, joining one already open there. The innermost commits first. */
     public <T> T inTransaction(Shard shard, Supplier<T> work) {
         return read(shard, () -> shard.transactions().execute(status -> work.get()));

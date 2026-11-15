@@ -1,62 +1,28 @@
 # Travel transactions and invoices
 
-A Spring Boot service that stores flight, hotel, rail and Navan fee transactions and issues invoices as frozen snapshots of them. Design and trade-offs are in [ARCHITECTURE.md](ARCHITECTURE.md).
+A Spring Boot service that stores flight, hotel, rail and Navan fee transactions and issues invoices as frozen snapshots of them. Data lives in MariaDB, split across two shards. Design and trade-offs are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Requirements
 
-- JDK 21. Maven is not needed; the wrapper downloads it. On macOS: `brew install openjdk@21` and `export JAVA_HOME=$(brew --prefix openjdk@21)`.
-- MariaDB 10.6 or newer (MySQL 8 also works) on `localhost:3306`, with a `travel` user that may create `travel_*` databases. On macOS:
+- **JDK 21.** Maven is not needed; the wrapper downloads it. On macOS: `brew install openjdk@21`.
+- **MariaDB 10.6 or newer** on `localhost:3306`, with a `travel` user allowed to create `travel_*` databases. On macOS:
 
   ```bash
   brew install mariadb && brew services start mariadb
-  mariadb < db/create-user.sql        # user travel / travel, allowed on travel_* databases
+  mariadb < db/create-user.sql        # creates user travel / travel
   ```
 
-  The app creates the two shard databases, `travel_shard_0` and `travel_shard_1`, and their tables on first start. Nothing else to set up.
+  The app creates its two shard databases, `travel_shard_0` and `travel_shard_1`, and their tables on first start.
 
 ## Run the API
 
 ```bash
-./run.sh            # builds without tests, then starts the API
+./run.sh
 ```
 
-`./run.sh` finds a JDK 21 by itself (`JAVA_HOME`, `java_home` or Homebrew). It also has `build`, `test` and `reset` (drops both shard databases); see `./run.sh help`. Without the script: `./mvnw spring-boot:run`.
+This builds the app and starts it on `http://localhost:8080`. `./run.sh` finds a JDK 21 by itself; `./run.sh help` lists its other commands: `build`, `test`, `reset` (drops both shard databases) and `rebalance` (see [Adding a shard](#adding-a-shard)). Without the script: `./mvnw spring-boot:run`.
 
-The API listens on `http://localhost:8080`. Flyway creates the same schema on both shards on start. `SHARD_0_URL`, `SHARD_1_URL`, `DATABASE_USERNAME` and `DATABASE_PASSWORD` point it elsewhere. To run the packaged jar instead: `./mvnw package -DskipTests && java -jar travel-app/target/travel-app-0.0.1-SNAPSHOT.jar`. `GET /health` reports status; `/health/readiness` (includes both shards) and `/health/liveness` are the probe endpoints.
-
-### Adding a shard
-
-Transactions are placed on a consistent-hash ring keyed by `external_id`, so a new shard takes over about a third of the keys (with three shards) and no rows move. Only the small `external_ids` records that guard uniqueness are moved, by a one-off command. Shard ids are permanent (0-63); never renumber or remove a shard that holds data.
-
-1. Add the shard to `travel.sharding.shards` with the next id, and set `previous-ring` to the shards that were there before:
-
-   ```yaml
-   travel:
-     sharding:
-       shards:
-         - { id: 0, url: "jdbc:mariadb://localhost:3306/travel_shard_0?createDatabaseIfNotExist=true" }
-         - { id: 1, url: "jdbc:mariadb://localhost:3306/travel_shard_1?createDatabaseIfNotExist=true" }
-         - { id: 2, url: "jdbc:mariadb://localhost:3306/travel_shard_2?createDatabaseIfNotExist=true" }
-       previous-ring: [0, 1]
-   ```
-
-2. Restart **every** instance with this configuration at the same time (stop all, then start). New writes go to the new ring at once; a create also checks the key's old owner, so existing `external_id`s stay unique. A rolling restart would let an old instance and a new one each accept the same new key.
-3. Run `./run.sh rebalance` (the same configuration) to move the uniqueness records to their new owners. It is safe to run again; the second run moves nothing.
-4. Remove `previous-ring` and restart, rolling is fine now. Creates go back to a single lookup.
-
-`AddShardTest` runs these steps end to end against three databases.
-
-### Swagger
-
-With the API running, open `http://localhost:8080/swagger-ui.html` to try every endpoint from the browser. The OpenAPI 3.1 spec is at `/v3/api-docs`. Set `SWAGGER_ENABLED=false` to turn both off.
-
-### Docker
-
-```bash
-docker compose up --build
-```
-
-This starts MariaDB 11.4 (creating the `travel` user from `db/create-user.sql`) and the app on `http://localhost:8080`, with both shards on that server. Set `APP_PORT` to publish it elsewhere (`APP_PORT=8090 docker compose up --build`). `docker compose down -v` stops everything and deletes the data. On macOS without Docker Desktop, `brew install colima docker docker-compose docker-buildx && colima start` is enough.
+`SHARD_0_URL`, `SHARD_1_URL`, `DATABASE_USERNAME` and `DATABASE_PASSWORD` point the app at other databases. `GET /health` reports status; `/health/readiness` (checks both shards) and `/health/liveness` are the probe endpoints. Swagger UI is at `http://localhost:8080/swagger-ui.html` (`SWAGGER_ENABLED=false` turns it off).
 
 ## Run the tests
 
@@ -64,7 +30,7 @@ This starts MariaDB 11.4 (creating the `travel` user from `db/create-user.sql`) 
 ./mvnw test
 ```
 
-The tests need the same MariaDB server (`TEST_DATABASE_HOST` overrides `localhost`). Each module's unit tests run first. Then the `travel-app` tests start the app on a random port and call it over HTTP, against two test shards, `travel_test_shard_0` and `travel_test_shard_1`, whose schema is dropped and recreated when the run starts. The brief's required tests map to:
+The tests use the same MariaDB server (`TEST_DATABASE_HOST` overrides `localhost`) and recreate their own databases, `travel_test_*`, on every run. The HTTP tests start the app on a random port and call it like a client. The brief's required tests:
 
 | # | Requirement | Test |
 |---|---|---|
@@ -79,19 +45,7 @@ The tests need the same MariaDB server (`TEST_DATABASE_HOST` overrides `localhos
 | 9 | DELETE invoice keeps its transactions | `InvoiceUpdateDeleteTest.deletingAnInvoiceKeepsItsTransactions` |
 | 10 | Default page size 50; `limit=1000` capped at 100 | `PaginationTest.listDefaultsToFiftyAndCapsLargeLimitsAtOneHundred` |
 
-`HashRingTest` checks the ring (placement, balance, and that adding a shard moves about a third of the keys, all to the new shard); `AddShardTest` runs the add-a-shard procedure end to end. `ShardingTest` covers the rest of the sharding: routing by `external_id`, ids that name their shard, a trip invoice spanning both shards, the 409 on a transaction whose invoice lives on the other shard, leftover-link cleanup, and list pages merged across shards.
-
-### Code quality
-
-`./mvnw verify` also writes a JaCoCo coverage report for all modules to `travel-app/target/site/jacoco-aggregate/index.html`. To run SonarQube locally:
-
-```bash
-docker run -d --name sonarqube -p 9000:9000 sonarqube:community   # then create a token at http://localhost:9000
-./mvnw verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
-  -Dsonar.host.url=http://localhost:9000 -Dsonar.token=<token> -Dsonar.projectKey=travel-invoice
-```
-
-Last run: quality gate passed; 0 bugs, 0 vulnerabilities, 0 code smells, 0 security hotspots, A ratings throughout, 85% line and 79% branch coverage, 0% duplication.
+Beyond those, `ShardingTest`, `HashRingTest` and `AddShardTest` cover the sharding (below). `./mvnw test` runs 80 tests in total.
 
 ## API
 
@@ -110,11 +64,13 @@ Last run: quality gate passed; 0 bugs, 0 vulnerabilities, 0 code smells, 0 secur
 
 Errors share one shape: `{"error": "<code>", "message": "...", "details": [...]}`. Any database contention that outlasts the retries returns 503 with `Retry-After`.
 
-Conventions:
+### Conventions
 
-- **Ids** are `txn_<n>` and `inv_<n>`. They are unique across shards but not consecutive: shard `s` hands out `s+1, s+65, s+129, …` (64 lanes, one per possible shard). **A transaction's server id is the `transaction_id` field** (there is no separate `id` field on a transaction); it is the value to pass to `GET /transactions/{id}` and to `POST /invoices`. An invoice's server id is `id`, and it lists its transactions in `transaction_ids`, the types on it in `transaction_types_included` and its Navan fee kinds in `navan_fee_kinds_included` (both in a fixed order, as in `expected-invoice.json`).
+- **Ids** are `txn_<n>` and `inv_<n>`: unique across shards, but not consecutive (see [Sharding](#sharding)).
+- **A transaction's id is the `transaction_id` field**; there is no separate `id` on a transaction. Pass it to `GET /transactions/{id}` and `POST /invoices`.
+- **An invoice's id is `id`.** It also lists `transaction_ids`, `transaction_types_included` and `navan_fee_kinds_included`, the last two in a fixed order as in `expected-invoice.json`.
 - **Money** is a JSON number with at most the currency's minor units (EUR: 2 decimals). Amounts are stored as `DECIMAL(19,4)` and never rounded.
-- **Lists** return newest first by creation time, merged across both shards: `{"items": [...], "limit": 50, "next_cursor": "..."}`. `limit` defaults to 50 and is capped at 100. Pass `next_cursor` back as `cursor`; it is absent on the last page.
+- **Lists** return newest first by creation time, merged across both shards: `{"items": [...], "limit": 50, "next_cursor": "..."}`. `limit` defaults to 50 and is capped at 100. The first page needs no cursor; pass `next_cursor` back as `cursor` for the next one. It is absent on the last page.
 - **PATCH /transactions** accepts `occurred_at`, `total`, `tax_lines`, `fee_lines`, `metadata`; each field sent replaces the stored one. `type`, `external_id` and `currency` cannot be changed.
 - **Invoice bodies** are `{"transaction_id": "..."}` or `{"transaction_ids": [...]}`, for both POST and PATCH.
 
@@ -227,22 +183,73 @@ USD_FEE=$(create "$(jq '.trip_fee | .external_id = "fee-usd" | .currency = "USD"
 post /invoices "{\"transaction_ids\": [\"$TRIP_FEE\", \"$USD_FEE\"]}"          # 409 mixed_currency
 ```
 
+## Sharding
+
+Every table exists on both shards. Where a row goes:
+
+- **Transactions** are placed by `external_id` on a consistent-hash ring (SHA-256, 256 points per shard). All requests for one `external_id` reach the same shard, so its unique index rejects duplicates, even from concurrent POSTs.
+- **Ids** tell you the shard: shard `s` issues `s+1, s+65, s+129, …`, so `txn_2` is on shard 1 and `txn_65` on shard 0. No lookup table is needed.
+- **Invoices** live on the lowest shard among their transactions. The trip invoice in the curls above spans both shards and still freezes correctly: each transaction's shard keeps a link to the invoice, written before the invoice commits and removed after it is deleted. [ARCHITECTURE.md](ARCHITECTURE.md) section 2 explains why that is safe without a distributed commit.
+- **Lists** ask every shard for its newest rows and merge them by creation time.
+
+### Adding a shard
+
+A new shard takes over about 1/N of the keys, all from the existing shards, and no transaction moves. Only the small `external_ids` records that guard uniqueness move. Shard ids (0-63) are permanent; never renumber or remove a shard that holds data.
+
+1. Add the shard with the next id, and set `previous-ring` to the shards that were there before:
+
+   ```yaml
+   travel:
+     sharding:
+       shards:
+         - { id: 0, url: "jdbc:mariadb://localhost:3306/travel_shard_0?createDatabaseIfNotExist=true" }
+         - { id: 1, url: "jdbc:mariadb://localhost:3306/travel_shard_1?createDatabaseIfNotExist=true" }
+         - { id: 2, url: "jdbc:mariadb://localhost:3306/travel_shard_2?createDatabaseIfNotExist=true" }
+       previous-ring: [0, 1]
+   ```
+
+2. Restart **all** instances together (stop all, then start). While `previous-ring` is set, a create also checks the key's old shard, so existing `external_id`s stay unique. A rolling restart here could let two instances accept the same new key.
+3. Run `./run.sh rebalance` to move the uniqueness records to their new shards. Running it again moves nothing.
+4. Remove `previous-ring` and restart; a rolling restart is fine now.
+
+`AddShardTest` runs these four steps end to end against three databases.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+Starts MariaDB 11.4 (with the `travel` user from `db/create-user.sql`) and the app on `http://localhost:8080`, both shards on that one server. `APP_PORT=8090 docker compose up --build` publishes it on another port; `docker compose down -v` stops everything and deletes the data. On macOS without Docker Desktop: `brew install colima docker docker-compose docker-buildx && colima start`.
+
+## Code quality
+
+`./mvnw verify` also writes a coverage report for all modules to `travel-app/target/site/jacoco-aggregate/index.html`. To run SonarQube locally:
+
+```bash
+docker run -d --name sonarqube -p 9000:9000 sonarqube:community   # then create a token at http://localhost:9000
+./mvnw verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+  -Dsonar.host.url=http://localhost:9000 -Dsonar.token=<token> -Dsonar.projectKey=travel-invoice
+```
+
+Last run: quality gate passed with 0 bugs, 0 vulnerabilities, 0 code smells, 0 security hotspots, A ratings, 85% coverage and no duplication.
+
 ## Project layout
 
 A Maven multi-module build. Dependencies point one way, `app → invoice → transaction → common`, and the build enforces it: the transaction module cannot see invoice code.
 
 | Module | Contents | Migration |
 |---|---|---|
-| `travel-common` | Money rules, paging, public ids, retry, shared exceptions; `shard/`: routing and shard-scoped database access | |
-| `travel-transaction` | Transaction model and sealed metadata types, validation, `external_id` identity, persistence | `V1__create_transaction_tables.sql` |
+| `travel-common` | Money rules, paging, public ids, retry, shared exceptions; `shard/`: the hash ring, routing, shard-scoped database access | |
+| `travel-transaction` | Transaction model and sealed metadata types, validation, `external_id` uniqueness and rebalancing, persistence | `V1__create_transaction_tables.sql` |
 | `travel-invoice` | Invoice service (the cross-shard write order), snapshot builder and rollups, persistence, billing links | `V2__create_invoice_tables.sql` |
-| `travel-app` | HTTP controllers, DTOs, error mapping, Spring Boot entry point, shard connection pools and migrations (`sharding/`), API tests | |
+| `travel-app` | HTTP controllers, DTOs, error mapping, Spring Boot entry point, shard pools, migrations and the `rebalance` command (`sharding/`), HTTP tests | |
 
 ```
 travel-transaction/src/main/java/com/navan/travel/transaction/
   TransactionService        use cases, lock rules, duplicate handling
   TransactionDraftFactory   request or patch -> validated draft (MetadataReader + TransactionValidator)
-  identity/                 external_id lookup and unique-violation detection
+  identity/                 external_ids lookups, duplicate detection, IdentityRebalancer
   metadata/                 FlightMetadata, HotelMetadata, RailMetadata, NavanFeeMetadata
   persistence/              TransactionWriter and TransactionLoader (public);
                             header, line and per-type detail repositories (package-private)
@@ -250,7 +257,7 @@ travel-invoice/src/main/java/com/navan/travel/invoice/
   InvoiceService            use cases, cross-shard lock and commit order
   BilledTransactionCheck    "is this transaction billed?" across shards
   snapshot/                 InvoiceSnapshotBuilder, RollupCalculator (no database access)
-  persistence/              invoice header, snapshot lines and rollups, invoice_links
+  persistence/              invoice header, frozen invoice lines, invoice_links
 ```
 
-Unit tests sit next to the code they cover (`MoneyTest`, `PageQueryTest`, `TransactionValidatorTest`, `RollupCalculatorTest`). The HTTP tests live in `travel-app`. `./mvnw test` runs all of them, 80 in total.
+Unit tests sit next to the code they cover (`MoneyTest`, `PageQueryTest`, `HashRingTest`, `TransactionValidatorTest`, `RollupCalculatorTest`); the HTTP tests live in `travel-app`.

@@ -12,12 +12,15 @@ import com.navan.travel.transaction.TaxLine;
 import com.navan.travel.transaction.TransactionType;
 import com.navan.travel.transaction.metadata.FeeKind;
 
-public record InvoiceSnapshot(
-        String currency,
-        BigDecimal total,
-        List<InvoiceLine> lines,
-        List<TaxLine> taxRollup,
-        List<FeeLine> feeRollup) {
+public record InvoiceSnapshot(String currency, BigDecimal total, List<InvoiceLine> lines) {
+
+    public List<TaxLine> taxRollup() {
+        return RollupCalculator.rollUpTaxes(lines.stream().flatMap(line -> line.taxLines().stream()).toList());
+    }
+
+    public List<FeeLine> feeRollup() {
+        return RollupCalculator.rollUpFees(lines.stream().flatMap(line -> line.feeLines().stream()).toList());
+    }
 
     public Map<String, BigDecimal> totalsByCategory() {
         return RollupCalculator.totalsByCategory(lines);
